@@ -82,6 +82,9 @@ class R2Storage(Storage):
             CopySource={"Bucket": self.bucket, "Key": src_key},
         )
 
+    def download_file(self, key: str, dest_path: str) -> None:
+        self._client.download_file(self.bucket, key, dest_path)
+
 
 class LocalStorage(Storage):
     def __init__(self, settings: Settings):

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from typing import List
@@ -122,16 +123,31 @@ def analyze_stem(project_id: str, stem_name: str, request: Request) -> ProjectRe
         raise HTTPException(status_code=404, detail="project not found")
     stem = _find_stem(project, stem_name)
 
-    if not isinstance(storage, LocalStorage):
-        raise HTTPException(
-            status_code=501,
-            detail="note analysis runs in local/mock mode only; RunPod transcription not yet wired",
-        )
-    path = storage.read_path(stem.key)
-    if path is None:
-        raise HTTPException(status_code=409, detail="stem file not found")
+    # Get a local file path for the stem regardless of storage backend, then run librosa
+    # on the backend (CPU — no GPU needed). Local mode reads from disk; R2 downloads a
+    # temp copy.
+    tmp_path = None
+    if isinstance(storage, LocalStorage):
+        p = storage.read_path(stem.key)
+        if p is None:
+            raise HTTPException(status_code=409, detail="stem file not found")
+        local_path = str(p)
+    else:
+        ext = os.path.splitext(stem.key)[1] or ".wav"
+        fd, tmp_path = tempfile.mkstemp(suffix=ext)
+        os.close(fd)
+        try:
+            storage.download_file(stem.key, tmp_path)
+        except Exception as exc:
+            os.remove(tmp_path)
+            raise HTTPException(status_code=409, detail=f"could not fetch stem: {exc}")
+        local_path = tmp_path
 
-    notes_raw, bpm, key, dur = analysis.analyze_stem(str(path))
+    try:
+        notes_raw, bpm, key, dur = analysis.analyze_stem(local_path)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
     stem.notes = [
         Note(
             id=f"{stem_name}-{i}",
