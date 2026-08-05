@@ -13,10 +13,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
 
 WORKDIR /app
 
-COPY requirements.txt .
+# Build context is the repo root (RunPod GitHub integration). Paths are runpod/-prefixed.
+COPY runpod/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY models.json separator_engine.py download_models.py handler.py ./
+COPY runpod/models.json runpod/separator_engine.py runpod/download_models.py runpod/handler.py ./
 
 # Bake model weights into the image (best-effort; falls back to runtime download).
 RUN python download_models.py

@@ -43,7 +43,8 @@ R2_BUCKET=retone
 
 1. Push this repo to GitHub.
 2. RunPod console → Serverless → New Endpoint → **GitHub Repo** → select repo/branch,
-   Dockerfile path `runpod/Dockerfile`, build context `runpod/`.
+   Dockerfile path `runpod/Dockerfile` (build context = repo root; the Dockerfile COPYs
+   are `runpod/`-prefixed to match).
 3. Pick a **24 GB GPU** (RTX 4090 / A5000). Set the env vars above.
 4. RunPod builds + hosts the image; each push redeploys. Copy the **Endpoint ID** into
    `backend/.env` as `RUNPOD_ENDPOINT_ID`, and your account **API key** as `RUNPOD_API_KEY`.
@@ -51,7 +52,8 @@ R2_BUCKET=retone
 ## Deploy — Option B: custom image
 
 ```bash
-docker build --platform linux/amd64 -t <user>/retone-worker:v1 runpod/
+# Run from the repo root (build context = repo root):
+docker build --platform linux/amd64 -f runpod/Dockerfile -t <user>/retone-worker:v1 .
 docker push <user>/retone-worker:v1
 # RunPod console → New Endpoint → Import from Docker Registry → <user>/retone-worker:v1
 ```
