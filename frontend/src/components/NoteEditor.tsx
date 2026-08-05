@@ -13,6 +13,7 @@ import {
   snapToScale,
 } from "../lib/musicTheory";
 import type { Note, SnapMode } from "../lib/types";
+import { instrumentsForStem } from "../lib/instrumentCatalog";
 import { BackIcon } from "./icons";
 
 interface Props {
@@ -24,8 +25,11 @@ interface Props {
   musicalKey: string | null;
   engine: AudioEngine;
   rendering?: boolean;
+  instrument?: string | null;
+  instrumentLoading?: boolean;
   onBack: () => void;
   onNotesChanged: (notes: Note[]) => void;
+  onInstrumentChange?: (id: string | null, notes: Note[]) => void;
 }
 
 interface Layout {
@@ -52,8 +56,11 @@ export default function NoteEditor({
   musicalKey,
   engine,
   rendering,
+  instrument,
+  instrumentLoading,
   onBack,
   onNotesChanged,
+  onInstrumentChange,
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -389,6 +396,23 @@ export default function NoteEditor({
         <span className="ne-color" style={{ background: color }} />
         <span className="ne-title">{stemName}</span>
         <span className="ne-key mono">{scale.label}</span>
+
+        <label className="ne-inst-wrap" title="Play this stem's notes with a different instrument">
+          <span className="ne-inst-label">Instrument</span>
+          <select
+            className="ne-instrument"
+            value={instrument ?? ""}
+            onChange={(e) => onInstrumentChange?.(e.target.value || null, notesRef.current)}
+          >
+            <option value="">Original sound</option>
+            {instrumentsForStem(stemName).map((i) => (
+              <option key={i.id} value={i.id}>
+                {i.label}
+              </option>
+            ))}
+          </select>
+          {instrumentLoading && <span className="ne-loadinst" />}
+        </label>
 
         <div className="ne-spacer" />
 

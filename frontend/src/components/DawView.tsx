@@ -35,11 +35,14 @@ export default function DawView({ project, onBack }: Props) {
   const [stemNotes, setStemNotes] = useState<Record<string, Note[]>>({});
   const [rendering, setRendering] = useState(false);
   const renderTimer = useRef<number | null>(null);
+  const [stemInstruments, setStemInstruments] = useState<Record<string, string | null>>({});
+  const [instLoading, setInstLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     const eng = new AudioEngine();
     engineRef.current = eng;
+    if (import.meta.env.DEV) (window as any).__retoneEngine = eng; // dev introspection hook
     eng.onStateChange = () => setPlaying(eng.isPlaying());
 
     const sources = project.stems
@@ -101,11 +104,33 @@ export default function DawView({ project, onBack }: Props) {
     ? project.stems.find((s) => s.name === activeStemName) ?? null
     : null;
 
+  // Switch a stem to an instrument (resynthesize its notes) or back to the original audio.
+  const handleInstrumentChange = async (
+    stemName: string,
+    id: string | null,
+    notes: Note[]
+  ) => {
+    const eng = engineRef.current;
+    if (!eng) return;
+    eng.setStemNotes(stemName, notes);
+    setStemInstruments((p) => ({ ...p, [stemName]: id }));
+    setInstLoading(true);
+    try {
+      await eng.setStemInstrument(stemName, id);
+    } catch (e) {
+      console.error("instrument load failed", e);
+    } finally {
+      setInstLoading(false);
+    }
+  };
+
   // Debounced: re-render the stem's audio from the immutable original + edits, then swap.
   const handleNotesChanged = (stemName: string, notes: Note[]) => {
     setStemNotes((p) => ({ ...p, [stemName]: notes }));
     const eng = engineRef.current;
     if (!eng) return;
+    eng.setStemNotes(stemName, notes); // keep instrument playback in sync with pitch edits
+    if (eng.hasInstrument(stemName)) return; // instrument mode: no original-audio re-render
     if (renderTimer.current) window.clearTimeout(renderTimer.current);
     renderTimer.current = window.setTimeout(async () => {
       const orig = eng.getOriginalBuffer(stemName);
@@ -183,8 +208,11 @@ export default function DawView({ project, onBack }: Props) {
           musicalKey={project.musical_key ?? null}
           engine={engineRef.current}
           rendering={rendering}
+          instrument={stemInstruments[activeStem.name] ?? null}
+          instrumentLoading={instLoading}
           onBack={() => setMode("tracks")}
           onNotesChanged={(n) => handleNotesChanged(activeStem.name, n)}
+          onInstrumentChange={(id, n) => handleInstrumentChange(activeStem.name, id, n)}
         />
       )}
     </div>

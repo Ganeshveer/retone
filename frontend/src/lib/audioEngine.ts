@@ -1,3 +1,5 @@
+import type { Note } from "./types";
+
 /**
  * Multitrack Web Audio engine for the ReTone DAW.
  *
@@ -59,6 +61,13 @@ export class AudioEngine {
   order: string[] = [];
 
   private sources = new Map<string, AudioBufferSourceNode>();
+
+  // Instrument-change (resynthesis): play a stem's notes through a sampler instead of its
+  // original audio. Sampler output routes to the stem's gain (mute/solo/volume still apply).
+  private stemInstrument = new Map<string, string>();
+  private instrumentSamplers = new Map<string, any>();
+  private stemNotesMap = new Map<string, Note[]>();
+
   private playing = false;
   private startedAt = 0; // ctx time when the current play began
   private offset = 0; // seconds into the song at startedAt
@@ -126,19 +135,140 @@ export class AudioEngine {
       src.disconnect();
     }
     this.sources.clear();
+    for (const inst of this.instrumentSamplers.values()) {
+      try {
+        inst.stop();
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   private startSources(from: number) {
     this.sources.clear();
+    this.startedAt = this.ctx.currentTime;
     for (const name of this.order) {
       const s = this.stems.get(name)!;
+      if (this.instrumentSamplers.get(name)) {
+        this.scheduleInstrument(name); // play notes via sampler instead of the buffer
+        continue;
+      }
       const src = this.ctx.createBufferSource();
       src.buffer = s.buffer;
       src.connect(s.gain);
       src.start(0, Math.min(from, s.buffer.duration));
       this.sources.set(name, src);
     }
-    this.startedAt = this.ctx.currentTime;
+  }
+
+  /** Store the notes used to resynthesize a stem when an instrument is selected. */
+  setStemNotes(name: string, notes: Note[]) {
+    this.stemNotesMap.set(name, notes);
+    if (this.playing && this.instrumentSamplers.get(name)) {
+      try {
+        this.instrumentSamplers.get(name).stop();
+      } catch {
+        /* ignore */
+      }
+      this.scheduleInstrument(name);
+    }
+  }
+
+  hasInstrument(name: string): boolean {
+    return this.instrumentSamplers.has(name);
+  }
+
+  /** Switch a stem to an instrument (GM name) or back to its original audio (null). */
+  async setStemInstrument(name: string, instrumentId: string | null): Promise<void> {
+    const stem = this.stems.get(name);
+    if (!stem) return;
+    const existing = this.instrumentSamplers.get(name);
+    if (existing) {
+      try {
+        existing.stop();
+        existing.output?.output?.disconnect?.();
+        existing.disconnect?.();
+      } catch {
+        /* ignore */
+      }
+      this.instrumentSamplers.delete(name);
+    }
+    if (!instrumentId) {
+      this.stemInstrument.delete(name);
+      if (this.playing) this.restartStem(name, true);
+      return;
+    }
+    this.stemInstrument.set(name, instrumentId);
+    const { Soundfont } = await import("smplr");
+    const inst: any = Soundfont(this.ctx, {
+      instrument: instrumentId,
+      kit: "FluidR3_GM",
+      destination: stem.gain,
+    });
+    await inst.load;
+    if (this.stemInstrument.get(name) !== instrumentId) {
+      try {
+        inst.stop();
+      } catch {
+        /* superseded by a newer selection */
+      }
+      return;
+    }
+    this.instrumentSamplers.set(name, inst);
+    if (this.playing) this.restartStem(name, false);
+  }
+
+  private restartStem(name: string, toBuffer: boolean) {
+    const src = this.sources.get(name);
+    if (src) {
+      try {
+        src.onended = null;
+        src.stop();
+      } catch {
+        /* ignore */
+      }
+      src.disconnect();
+      this.sources.delete(name);
+    }
+    const inst = this.instrumentSamplers.get(name);
+    if (inst) {
+      try {
+        inst.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+    const stem = this.stems.get(name);
+    if (!stem) return;
+    if (!toBuffer && inst) {
+      this.scheduleInstrument(name);
+    } else {
+      const s = this.ctx.createBufferSource();
+      s.buffer = stem.buffer;
+      s.connect(stem.gain);
+      s.start(0, Math.min(this.rawTime(), stem.buffer.duration));
+      this.sources.set(name, s);
+    }
+  }
+
+  private scheduleInstrument(name: string) {
+    const inst = this.instrumentSamplers.get(name);
+    if (!inst) return;
+    const notes = this.stemNotesMap.get(name) || [];
+    const now = this.rawTime();
+    for (const n of notes) {
+      const end = n.start + n.dur;
+      if (end <= now + 0.02) continue;
+      const when = this.startedAt + (n.start - this.offset);
+      const startAt = Math.max(when, this.ctx.currentTime + 0.01);
+      const remaining = end - Math.max(n.start, now);
+      inst.start({
+        note: Math.round(n.midi),
+        time: startAt,
+        duration: Math.max(0.08, remaining),
+        velocity: Math.round(50 + 70 * Math.min(1, Math.max(0, n.confidence ?? 1))),
+      });
+    }
   }
 
   /** Immutable original buffer for a stem (for re-rendering pitch edits). */
