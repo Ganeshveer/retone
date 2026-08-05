@@ -1,0 +1,16 @@
+{
+  "_comment": "Per-tier separation model config. Each 'model' is an audio-separator model filename (see `audio-separator --list_models`). Override any value at deploy time with the matching env var (MODEL_2STEM / MODEL_4STEM / MODEL_6STEM) without rebuilding. Defaults are robust + MIT-clean; upgrade 4/6-stem to SCNet-XL / BS-ROFO-SW via MSST for higher quality (see README).",
+  "2stem": {
+    "model": "model_bs_roformer_ep_317_sdr_12.9755.ckpt",
+    "stems": ["vocals", "instrumental"]
+  },
+  "4stem": {
+    "model": "htdemucs.yaml",
+    "stems": ["vocals", "drums", "bass", "other"]
+  },
+  "6stem": {
+    "model": "htdemucs_6s.yaml",
+    "stems": ["vocals", "drums", "bass", "guitar", "piano", "other"]
+  },
+  "default_tier": "4stem"
+}

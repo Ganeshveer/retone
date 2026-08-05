@@ -1,0 +1,47 @@
+# --- Secrets ---
+.env
+.env.local
+*.env
+!.env.example
+backend/.env
+runpod/.env
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+*.sqlite3
+*.db
+
+# --- Node / frontend ---
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+frontend/stats.html
+
+# --- Model weights / large binaries (never commit) ---
+*.ckpt
+*.pth
+*.onnx
+*.safetensors
+runpod/models/
+runpod/weights/
+
+# --- Audio scratch (local test artifacts) ---
+scratch/
+tmp/
+*.wav
+*.flac
+*.mp3
+!frontend/public/**/*.mp3
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json

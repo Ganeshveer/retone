@@ -1,0 +1,153 @@
+/* ReTone design system — "retro 2010s, clean & modern".
+   Flat, dark-mode-first DAW canvas + one warm amber accent + monospace numerals. */
+
+:root {
+  /* Charcoal canvas layers */
+  --bg-0: #14161a; /* deepest — DAW canvas */
+  --bg-1: #1c1f26; /* panels */
+  --bg-2: #242833; /* raised controls */
+  --bg-3: #2e333f; /* hover */
+  --line: #333a47; /* borders / grid */
+  --line-soft: #262b34;
+
+  /* Text */
+  --text-0: #e9ebef;
+  --text-1: #a7adba;
+  --text-2: #6b7280;
+
+  /* Warm accent (SoundCloud-amber tradition) */
+  --accent: #f2a63d;
+  --accent-hi: #ffbb52;
+  --accent-dim: rgba(242, 166, 61, 0.15);
+  --accent-glow: rgba(242, 166, 61, 0.35);
+
+  /* Status */
+  --danger: #e0564b;
+  --good: #3fa66a;
+  --solo: #e8c33a;
+
+  /* Radii */
+  --r-sm: 4px;
+  --r: 8px;
+  --r-lg: 12px;
+  --pill: 999px;
+
+  /* Type */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 6px 24px rgba(0, 0, 0, 0.45);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg-0);
+  color: var(--text-0);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+button {
+  font-family: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* Chunky pill button */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--text-0);
+  padding: 8px 16px;
+  border-radius: var(--pill);
+  font-weight: 600;
+  font-size: 13px;
+  transition: background 0.12s, border-color 0.12s, transform 0.05s;
+  user-select: none;
+}
+.btn:hover {
+  background: var(--bg-3);
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1a1204;
+}
+.btn-primary:hover {
+  background: var(--accent-hi);
+}
+.btn-ghost {
+  background: transparent;
+}
+
+/* Small square icon button */
+.iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-1);
+}
+.iconbtn:hover {
+  background: var(--bg-3);
+  color: var(--text-0);
+}
+
+.panel {
+  background: var(--bg-1);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-lg);
+}
+
+/* Thin scrollbars that fit the dark canvas */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--bg-3);
+  border-radius: var(--pill);
+  border: 2px solid var(--bg-0);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

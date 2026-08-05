@@ -1,0 +1,110 @@
+"""RunPod Serverless handler for ReTone.
+
+Tasks (job["input"]["task"]):
+  - "ping"     -> health check, confirms the model warmed at boot.
+  - "separate" -> {audio_key, tier, output_prefix, output_format, bucket}
+                  pulls audio from R2, separates stems, writes them back to R2,
+                  returns {"stems": [{"name","key"}, ...]}.
+
+R2 credentials come from the worker's environment (set on the RunPod endpoint), not from
+the job payload. Audio never travels through the job payload (RunPod's ~10MB cap) — only
+object keys do.
+"""
+from __future__ import annotations
+
+import os
+import tempfile
+from pathlib import Path
+from typing import Any, Dict
+
+import runpod
+
+from separator_engine import SeparatorEngine, load_model_config
+
+# --- R2 / S3 config from environment ---
+R2_BUCKET_DEFAULT = os.environ.get("R2_BUCKET", "retone")
+
+
+def _r2_endpoint() -> str:
+    ep = os.environ.get("R2_ENDPOINT_URL")
+    if ep:
+        return ep
+    acct = os.environ.get("R2_ACCOUNT_ID")
+    if acct:
+        return f"https://{acct}.r2.cloudflarestorage.com"
+    raise RuntimeError("R2 endpoint not configured (set R2_ENDPOINT_URL or R2_ACCOUNT_ID)")
+
+
+def _r2_client():
+    import boto3
+    from botocore.config import Config as BotoConfig
+
+    return boto3.client(
+        "s3",
+        endpoint_url=_r2_endpoint(),
+        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+        region_name="auto",
+        config=BotoConfig(signature_version="s3v4"),
+    )
+
+
+# --- Model warmed at boot so FlashBoot snapshots it (resume < ~200ms) ---
+try:
+    ENGINE: SeparatorEngine | None = SeparatorEngine()
+    ENGINE.warm(load_model_config().get("default_tier", "4stem"))
+    print("[boot] separator engine warmed", flush=True)
+except Exception as exc:  # keep the worker alive; load lazily on first job
+    print(f"[boot] warm failed ({exc}); will load lazily", flush=True)
+    ENGINE = None
+
+
+def _get_engine() -> SeparatorEngine:
+    global ENGINE
+    if ENGINE is None:
+        ENGINE = SeparatorEngine()
+    return ENGINE
+
+
+def _do_separate(inp: Dict[str, Any]) -> Dict[str, Any]:
+    audio_key = inp["audio_key"]
+    tier = inp.get("tier", "4stem")
+    output_prefix = inp.get("output_prefix", f"stems/{Path(audio_key).stem}/")
+    output_format = (inp.get("output_format") or "flac").lower()
+    bucket = inp.get("bucket") or R2_BUCKET_DEFAULT
+
+    s3 = _r2_client()
+    engine = _get_engine()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        local_in = str(Path(tmp) / Path(audio_key).name)
+        s3.download_file(bucket, audio_key, local_in)
+
+        stems = engine.separate(tier, local_in)  # [(name, path), ...]
+
+        results = []
+        for name, path in stems:
+            key = f"{output_prefix}{name}.{output_format}"
+            s3.upload_file(
+                path, bucket, key,
+                ExtraArgs={"ContentType": f"audio/{output_format}"},
+            )
+            results.append({"name": name, "key": key})
+
+    return {"stems": results, "tier": tier}
+
+
+def handler(job: Dict[str, Any]) -> Dict[str, Any]:
+    inp = job.get("input") or {}
+    task = inp.get("task", "separate")
+    try:
+        if task == "ping":
+            return {"pong": True, "engine_ready": ENGINE is not None}
+        if task == "separate":
+            return _do_separate(inp)
+        return {"error": f"unknown task: {task}"}
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+runpod.serverless.start({"handler": handler})
