@@ -19,7 +19,7 @@ from typing import Any, Dict
 
 import runpod
 
-from separator_engine import SeparatorEngine, load_model_config
+from separator_engine import SeparatorEngine
 
 # --- R2 / S3 config from environment ---
 R2_BUCKET_DEFAULT = os.environ.get("R2_BUCKET", "retone")
@@ -49,19 +49,16 @@ def _r2_client():
     )
 
 
-# --- Model warmed at boot so FlashBoot snapshots it (resume < ~200ms) ---
-try:
-    ENGINE: SeparatorEngine | None = SeparatorEngine()
-    ENGINE.warm(load_model_config().get("default_tier", "4stem"))
-    print("[boot] separator engine warmed", flush=True)
-except Exception as exc:  # keep the worker alive; load lazily on first job
-    print(f"[boot] warm failed ({exc}); will load lazily", flush=True)
-    ENGINE = None
+# IMPORTANT: do NOT build the engine or download models at import time. That would block
+# the worker from reaching runpod.serverless.start() below, so it would never pull jobs
+# (symptom: workers show "ready" but jobs sit IN_QUEUE forever). Load lazily on first job.
+ENGINE: SeparatorEngine | None = None
 
 
 def _get_engine() -> SeparatorEngine:
     global ENGINE
     if ENGINE is None:
+        print("[worker] building separator engine (first job)…", flush=True)
         ENGINE = SeparatorEngine()
     return ENGINE
 
