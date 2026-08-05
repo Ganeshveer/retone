@@ -1,6 +1,8 @@
 # ReTone RunPod Serverless worker.
-# Base image ships CUDA + PyTorch so audio-separator's GPU path works out of the box.
-FROM pytorch/pytorch:2.3.1-cuda12.1-cudnn8-runtime
+# Base ships PyTorch 2.7.1 + CUDA 12.8 — has sm_120 kernels so it runs on Blackwell
+# (RTX PRO 6000) GPUs as well as Ampere/Ada. audio-separator needs only torch>=2.3, so it
+# installs on top WITHOUT downgrading torch (which would drop Blackwell support).
+FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
