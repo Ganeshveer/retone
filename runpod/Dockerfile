@@ -9,9 +9,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     MODEL_DIR=/app/models \
     SEP_OUTPUT_DIR=/tmp/retone_out
 
-# ffmpeg is required by audio-separator for decode/encode.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
-    rm -rf /var/lib/apt/lists/*
+# ffmpeg: decode/encode. build-essential + python headers: the new base uses Python 3.11,
+# and Demucs's `diffq` dependency has no 3.11 wheel so it compiles from source (needs gcc).
+# git: lets RunPod capture the commit for the build.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg build-essential git && \
+    rm -rf /var/lib/apt/lists/* && \
+    rm -f /opt/conda/compiler_compat/ld   # conda ld shim breaks system-gcc C-ext builds
 
 WORKDIR /app
 
