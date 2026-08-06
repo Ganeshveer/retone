@@ -31,6 +31,9 @@ frontend/stats.html
 *.safetensors
 runpod/models/
 runpod/weights/
+# ...except the small DDSP worker weights that must ship in the image (< GitHub 100MB/file):
+!runpod/ddsp_models/violin.pth
+!runpod/vendor/ddsp_pytorch/components/ptcrepe/ptcrepe/crepe-full.pth
 
 # --- Audio scratch (local test artifacts) ---
 scratch/

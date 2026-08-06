@@ -19,7 +19,7 @@ from ..models import (
     ProjectResponse,
     ProjectStatus,
 )
-from ..services import analysis, separation
+from ..services import analysis, separation, tone_transfer
 from ..storage import LocalStorage
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -193,3 +193,37 @@ def save_notes(
     db.save(project)
     separation.populate_urls(project, storage)
     return ProjectResponse(project=project)
+
+
+@router.get("/meta/ddsp-instruments")
+def ddsp_instruments() -> dict:
+    return {"instruments": tone_transfer.DDSP_INSTRUMENTS}
+
+
+@router.post("/{project_id}/stems/{stem_name}/tone-transfer")
+async def tone_transfer_stem(
+    project_id: str, stem_name: str, request: Request, instrument: str = "violin"
+) -> dict:
+    """Re-voice a stem as a DDSP instrument (blocking; render takes ~30-120s). Returns a
+    presigned URL for the rendered audio, which the browser swaps in for that stem."""
+    settings = request.app.state.settings
+    storage = request.app.state.storage
+    runpod = request.app.state.runpod
+
+    project = db.get(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    stem = _find_stem(project, stem_name)
+    if instrument not in tone_transfer.DDSP_INSTRUMENTS:
+        raise HTTPException(status_code=400, detail=f"unknown DDSP instrument '{instrument}'")
+    if runpod is None:
+        raise HTTPException(
+            status_code=501, detail="DDSP timbre transfer requires the RunPod worker"
+        )
+    try:
+        url = await tone_transfer.run_tone_transfer(
+            project, stem, instrument, settings, storage, runpod
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"tone-transfer failed: {exc}")
+    return {"status": "ready", "instrument": instrument, "url": url}

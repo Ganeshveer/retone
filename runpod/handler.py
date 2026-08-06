@@ -91,6 +91,45 @@ def _do_separate(inp: Dict[str, Any]) -> Dict[str, Any]:
     return {"stems": results, "tier": tier}
 
 
+# --- DDSP timbre-transfer engine (lazy) ---
+_DDSP = None
+
+
+def _get_ddsp():
+    global _DDSP
+    if _DDSP is None:
+        print("[worker] loading DDSP engine…", flush=True)
+        from ddsp_engine import DDSPEngine
+
+        _DDSP = DDSPEngine()
+    return _DDSP
+
+
+def _do_tone_transfer(inp: Dict[str, Any]) -> Dict[str, Any]:
+    import soundfile as sf
+
+    audio_key = inp["audio_key"]
+    instrument = inp.get("instrument", "violin")
+    mode = inp.get("mode", "mono")
+    output_key = inp["output_key"]
+    bucket = inp.get("bucket") or R2_BUCKET_DEFAULT
+
+    s3 = _r2_client()
+    eng = _get_ddsp()
+    with tempfile.TemporaryDirectory() as tmp:
+        local_in = str(Path(tmp) / Path(audio_key).name)
+        s3.download_file(bucket, audio_key, local_in)
+        audio, sr = sf.read(local_in, dtype="float32")
+        # Stage 2 (poly multi-voice) not yet implemented — fall back to mono for now.
+        out, osr = eng.render_mono(audio, sr, instrument)
+        local_out = str(Path(tmp) / "out.flac")
+        sf.write(local_out, out, osr)
+        s3.upload_file(
+            local_out, bucket, output_key, ExtraArgs={"ContentType": "audio/flac"}
+        )
+    return {"output_key": output_key, "instrument": instrument, "mode": mode, "sr": osr}
+
+
 def handler(job: Dict[str, Any]) -> Dict[str, Any]:
     inp = job.get("input") or {}
     task = inp.get("task", "separate")
@@ -99,6 +138,8 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
             return {"pong": True, "engine_ready": ENGINE is not None}
         if task == "separate":
             return _do_separate(inp)
+        if task == "tone_transfer":
+            return _do_tone_transfer(inp)
         return {"error": f"unknown task: {task}"}
     except Exception as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}

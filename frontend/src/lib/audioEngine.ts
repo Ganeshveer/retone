@@ -277,6 +277,13 @@ export class AudioEngine {
     return this.stems.get(name)?.original ?? null;
   }
 
+  /** Fetch + decode an audio URL into an AudioBuffer on this engine's context. */
+  async decodeUrl(url: string): Promise<AudioBuffer> {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
+    return this.ctx.decodeAudioData(await res.arrayBuffer());
+  }
+
   /** Swap a stem's playing buffer (e.g. an edited render). Glitch-free while playing:
    *  the affected source is rebuilt at the current playhead. Buffer length must match. */
   swapBuffer(name: string, buffer: AudioBuffer) {

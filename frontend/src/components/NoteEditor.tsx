@@ -27,10 +27,18 @@ interface Props {
   rendering?: boolean;
   instrument?: string | null;
   instrumentLoading?: boolean;
+  ddspInstruments?: string[];
   onBack: () => void;
   onNotesChanged: (notes: Note[]) => void;
   onInstrumentChange?: (id: string | null, notes: Note[]) => void;
 }
+
+const DDSP_LABELS: Record<string, string> = {
+  violin: "Violin",
+  saxophone: "Saxophone",
+  flute: "Flute",
+  trumpet: "Trumpet",
+};
 
 interface Layout {
   gutterW: number;
@@ -58,6 +66,7 @@ export default function NoteEditor({
   rendering,
   instrument,
   instrumentLoading,
+  ddspInstruments,
   onBack,
   onNotesChanged,
   onInstrumentChange,
@@ -405,11 +414,22 @@ export default function NoteEditor({
             onChange={(e) => onInstrumentChange?.(e.target.value || null, notesRef.current)}
           >
             <option value="">Original sound</option>
-            {instrumentsForStem(stemName).map((i) => (
-              <option key={i.id} value={i.id}>
-                {i.label}
-              </option>
-            ))}
+            <optgroup label="Sampler (replay notes)">
+              {instrumentsForStem(stemName).map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.label}
+                </option>
+              ))}
+            </optgroup>
+            {ddspInstruments && ddspInstruments.length > 0 && (
+              <optgroup label="Timbre transfer (DDSP)">
+                {ddspInstruments.map((id) => (
+                  <option key={`ddsp:${id}`} value={`ddsp:${id}`}>
+                    {DDSP_LABELS[id] ?? id} — same performance
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
           {instrumentLoading && <span className="ne-loadinst" />}
         </label>

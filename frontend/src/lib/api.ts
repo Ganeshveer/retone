@@ -104,4 +104,26 @@ export async function saveNotes(
   return r.project;
 }
 
+export async function ddspInstruments(): Promise<string[]> {
+  const r = await json<{ instruments: string[] }>(
+    await fetch(`${API_BASE}/api/projects/meta/ddsp-instruments`)
+  );
+  return r.instruments;
+}
+
+export async function toneTransfer(
+  projectId: string,
+  stemName: string,
+  instrument: string
+): Promise<{ status: string; instrument: string; url: string }> {
+  return json(
+    await fetch(
+      `${API_BASE}/api/projects/${projectId}/stems/${stemName}/tone-transfer?instrument=${encodeURIComponent(
+        instrument
+      )}`,
+      { method: "POST" }
+    )
+  );
+}
+
 export { API_BASE };
