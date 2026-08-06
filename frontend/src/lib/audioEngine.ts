@@ -264,6 +264,7 @@ export class AudioEngine {
       const remaining = end - Math.max(n.start, now);
       inst.start({
         note: Math.round(n.midi),
+        detune: Math.round((n.midi - Math.round(n.midi)) * 100), // cents, for off-tune notes
         time: startAt,
         duration: Math.max(0.08, remaining),
         velocity: Math.round(50 + 70 * Math.min(1, Math.max(0, n.confidence ?? 1))),

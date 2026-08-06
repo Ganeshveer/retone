@@ -45,7 +45,7 @@ class Note(BaseModel):
     start: float          # seconds
     dur: float            # seconds
     midi: float           # current (possibly edited) pitch; fractional allowed (cents)
-    original_midi: int    # detected pitch (for reset / cents deviation)
+    original_midi: float  # detected pitch (fractional — off-tune position, for reset/cents)
     confidence: float = 1.0
 
 

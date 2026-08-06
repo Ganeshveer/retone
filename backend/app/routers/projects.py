@@ -6,7 +6,7 @@ import re
 import tempfile
 import uuid
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -115,8 +115,14 @@ def _find_stem(project: Project, stem_name: str):
 
 # NOTE: sync def -> FastAPI runs analysis in a threadpool so the librosa work
 # (CPU-heavy pyin) doesn't block the event loop.
+# Stems that are typically polyphonic → Basic Pitch (chords); others → pyin (mono).
+_POLY_STEMS = {"piano", "guitar", "other", "instrumental"}
+
+
 @router.post("/{project_id}/stems/{stem_name}/analyze", response_model=ProjectResponse)
-def analyze_stem(project_id: str, stem_name: str, request: Request) -> ProjectResponse:
+def analyze_stem(
+    project_id: str, stem_name: str, request: Request, poly: Optional[bool] = None
+) -> ProjectResponse:
     storage = request.app.state.storage
     project = db.get(project_id)
     if project is None:
@@ -143,8 +149,9 @@ def analyze_stem(project_id: str, stem_name: str, request: Request) -> ProjectRe
             raise HTTPException(status_code=409, detail=f"could not fetch stem: {exc}")
         local_path = tmp_path
 
+    polyphonic = poly if poly is not None else (stem_name in _POLY_STEMS)
     try:
-        notes_raw, bpm, key, dur = analysis.analyze_stem(local_path)
+        notes_raw, bpm, key, dur = analysis.analyze_stem(local_path, polyphonic=polyphonic)
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)

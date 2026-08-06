@@ -67,7 +67,9 @@ def _segment_notes(f0, voiced_flag, voiced_probs, times, midi,
             notes.append({
                 "start": round(float(times[start_i]), 4),
                 "dur": round(dur, 4),
-                "midi": int(round(float(np.median(pitches)))),
+                # fractional pitch (mean f0 in MIDI) so an off-tune note sits at its true
+                # position — the editor shows cents deviation and lets the user nudge it.
+                "midi": round(float(np.median(pitches)), 3),
                 "confidence": round(float(np.clip(np.mean(confs), 0.0, 1.0)), 3),
             })
         i = last_active + 1
@@ -111,23 +113,57 @@ def _estimate_bpm(y, sr) -> Optional[float]:
         return None
 
 
-def analyze_stem(path: str) -> Tuple[List[dict], Optional[float], Optional[str], float]:
-    """Analyze one stem file. Returns (notes, bpm, key, duration_seconds)."""
-    import numpy as np
+def _analyze_poly(path: str) -> List[dict]:
+    """Polyphonic transcription via Spotify Basic Pitch (CPU). Detects overlapping notes
+    (chords). Returns [{start, dur, midi, confidence}, ...]."""
+    import contextlib
+    import io
+
+    from basic_pitch.inference import predict
+
+    # Basic Pitch's model prints per-frame diagnostics to stdout — silence them.
+    with contextlib.redirect_stdout(io.StringIO()):
+        _, _, note_events = predict(path)
+
+    notes: List[dict] = []
+    for ev in note_events:
+        start, end, pitch = float(ev[0]), float(ev[1]), int(ev[2])
+        amp = float(ev[3]) if len(ev) > 3 else 1.0
+        dur = end - start
+        if dur < 0.03:
+            continue
+        notes.append({
+            "start": round(start, 4),
+            "dur": round(dur, 4),
+            "midi": float(pitch),
+            "confidence": round(min(1.0, max(0.0, amp)), 3),
+        })
+    notes.sort(key=lambda n: n["start"])
+    return notes
+
+
+def analyze_stem(
+    path: str, polyphonic: bool = False
+) -> Tuple[List[dict], Optional[float], Optional[str], float]:
+    """Analyze one stem file. Returns (notes, bpm, key, duration_seconds).
+    polyphonic=True uses Basic Pitch (chords); False uses pyin (monophonic, fractional)."""
     import librosa
 
     y, sr = librosa.load(path, sr=_SR, mono=True)
     duration = float(len(y) / sr)
 
-    fmin = librosa.note_to_hz("C2")
-    fmax = librosa.note_to_hz("C7")
-    f0, voiced_flag, voiced_probs = librosa.pyin(
-        y, fmin=fmin, fmax=fmax, sr=sr, frame_length=_FRAME, hop_length=_HOP
-    )
-    times = librosa.times_like(f0, sr=sr, hop_length=_HOP)
-    midi = librosa.hz_to_midi(f0)
+    if polyphonic:
+        notes = _analyze_poly(path)
+    else:
+        fmin = librosa.note_to_hz("C2")
+        fmax = librosa.note_to_hz("C7")
+        f0, voiced_flag, voiced_probs = librosa.pyin(
+            y, fmin=fmin, fmax=fmax, sr=sr, frame_length=_FRAME, hop_length=_HOP
+        )
+        times = librosa.times_like(f0, sr=sr, hop_length=_HOP)
+        midi = librosa.hz_to_midi(f0)
+        notes = _segment_notes(f0, voiced_flag, voiced_probs, times, midi)
 
-    notes = _segment_notes(f0, voiced_flag, voiced_probs, times, midi)
     bpm = _estimate_bpm(y, sr)
     key = _estimate_key(y, sr)
     return notes, bpm, key, round(duration, 3)
