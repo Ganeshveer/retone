@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     runpod_endpoint_id: Optional[str] = None
     runpod_poll_interval_seconds: float = 3.0
     runpod_job_timeout_seconds: int = 600
+    # Auto scale-to-zero: workers to run while a job is in flight; dropped to 0 when idle.
+    runpod_max_workers: int = 1
+    runpod_autoscale: bool = True
 
     # --- Hugging Face (optional) ---
     hf_token: Optional[str] = None

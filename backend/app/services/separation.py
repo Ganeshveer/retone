@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from typing import List
 
+from .. import db
 from ..config import Settings
 from ..models import (
     DEFAULT_COLOR,
@@ -49,6 +50,8 @@ async def start_separation(
         return _mock_separate(project, stem_names, storage)
 
     output_prefix = f"stems/{project.id}/"
+    if settings.runpod_autoscale:
+        await runpod.set_max_workers(settings.runpod_max_workers)  # wake the endpoint
     job_id = await runpod.run(
         {
             "task": "separate",
@@ -121,5 +124,14 @@ async def refresh_status(
     elif RunPodClient.is_terminal(status):
         project.status = ProjectStatus.failed
         project.error = str(result.get("error") or status)
+
+    # Scale the endpoint back to 0 once no separations remain in flight (zero idle cost).
+    if settings.runpod_autoscale and project.status in (ProjectStatus.ready, ProjectStatus.failed):
+        others = [
+            p for p in db.list_all()
+            if p.status == ProjectStatus.separating and p.id != project.id
+        ]
+        if not others:
+            await runpod.set_max_workers(0)
 
     return project
