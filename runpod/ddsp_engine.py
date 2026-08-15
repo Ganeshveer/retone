@@ -21,9 +21,11 @@ _MODELS_DIR = os.path.join(_HERE, "ddsp_models")
 if _VENDOR not in sys.path:
     sys.path.insert(0, _VENDOR)
 
-# instrument -> (weights file, config yaml)
+# instrument -> (weights file, config yaml). See ddsp_models/README.md for provenance
+# of each checkpoint, training details, and licensing.
 MODELS = {
-    "violin": ("violin.pth", "violin.yaml"),
+    "violin": ("violin48.pth", "violin48.yaml"),  # v3: 48kHz, own-trained (URMP), best val@step 34k
+    "violin_16k_v2": ("violin.pth", "violin.yaml"),  # v2: 16kHz pretrained (sweetcocoa) — kept for A/B
 }
 
 
