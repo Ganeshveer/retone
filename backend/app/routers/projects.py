@@ -200,12 +200,41 @@ def ddsp_instruments() -> dict:
     return {"instruments": tone_transfer.DDSP_INSTRUMENTS}
 
 
+@router.get("/meta/after-instruments")
+def after_instruments() -> dict:
+    """Instruments handled by the AFTER (latent-diffusion) engine — Track A."""
+    return {"instruments": tone_transfer.AFTER_INSTRUMENTS}
+
+
+@router.get("/meta/drum-kits")
+def drum_kits() -> dict:
+    """Target kits handled by the Drums engine — Track C."""
+    return {"instruments": tone_transfer.DRUM_KITS}
+
+
+_ENGINE_CATALOGUES = {
+    "ddsp": tone_transfer.DDSP_INSTRUMENTS,
+    "after": tone_transfer.AFTER_INSTRUMENTS,
+    "drums": tone_transfer.DRUM_KITS,
+}
+
+
 @router.post("/{project_id}/stems/{stem_name}/tone-transfer")
 async def tone_transfer_stem(
-    project_id: str, stem_name: str, request: Request, instrument: str = "violin"
+    project_id: str,
+    stem_name: str,
+    request: Request,
+    instrument: str = "violin",
+    engine: str = "ddsp",
 ) -> dict:
-    """Re-voice a stem as a DDSP instrument (blocking; render takes ~30-120s). Returns a
-    presigned URL for the rendered audio, which the browser swaps in for that stem."""
+    """Re-voice a stem via one of the deployed timbre-transfer engines (blocking; render
+    takes ~30-120s). Returns a presigned URL for the rendered audio, which the browser
+    swaps in for that stem.
+
+    `engine` selects the model family: "ddsp" (mono-pitched, shipping), "after" (Track A,
+    polyphonic), "drums" (Track C, drum-kit swap). Default "ddsp" preserves the shipping
+    behaviour for any caller that predates the multi-engine world.
+    """
     settings = request.app.state.settings
     storage = request.app.state.storage
     runpod = request.app.state.runpod
@@ -214,16 +243,26 @@ async def tone_transfer_stem(
     if project is None:
         raise HTTPException(status_code=404, detail="project not found")
     stem = _find_stem(project, stem_name)
-    if instrument not in tone_transfer.DDSP_INSTRUMENTS:
-        raise HTTPException(status_code=400, detail=f"unknown DDSP instrument '{instrument}'")
+
+    catalogue = _ENGINE_CATALOGUES.get(engine)
+    if catalogue is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown engine '{engine}' (expected one of: {list(_ENGINE_CATALOGUES)})",
+        )
+    if instrument not in catalogue:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown {engine} instrument '{instrument}' (have: {catalogue})",
+        )
     if runpod is None:
         raise HTTPException(
-            status_code=501, detail="DDSP timbre transfer requires the RunPod worker"
+            status_code=501, detail="timbre transfer requires the RunPod worker"
         )
     try:
         url = await tone_transfer.run_tone_transfer(
-            project, stem, instrument, settings, storage, runpod
+            project, stem, instrument, settings, storage, runpod, engine=engine
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"tone-transfer failed: {exc}")
-    return {"status": "ready", "instrument": instrument, "url": url}
+    return {"status": "ready", "engine": engine, "instrument": instrument, "url": url}

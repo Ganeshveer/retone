@@ -49,3 +49,4 @@ tmp/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+.venv_ddsp/

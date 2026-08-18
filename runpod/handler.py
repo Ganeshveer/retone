@@ -91,8 +91,10 @@ def _do_separate(inp: Dict[str, Any]) -> Dict[str, Any]:
     return {"stems": results, "tier": tier}
 
 
-# --- DDSP timbre-transfer engine (lazy) ---
+# --- Timbre-transfer engines (each lazy-loaded on first job — see the L52-54 caveat) ---
 _DDSP = None
+_AFTER = None
+_DRUMS = None
 
 
 def _get_ddsp():
@@ -105,29 +107,74 @@ def _get_ddsp():
     return _DDSP
 
 
+def _get_after():
+    """AFTER (ACIDS-IRCAM latent diffusion) — Track A. Not deployed yet."""
+    global _AFTER
+    if _AFTER is None:
+        print("[worker] loading AFTER engine…", flush=True)
+        from after_engine import AFTEREngine  # noqa: F401  (module lands with Track A)
+
+        _AFTER = AFTEREngine()
+    return _AFTER
+
+
+def _get_drums():
+    """Inverse Drum Machine — Track C. Not deployed yet."""
+    global _DRUMS
+    if _DRUMS is None:
+        print("[worker] loading Drums engine…", flush=True)
+        from drum_engine import DrumEngine  # noqa: F401  (module lands with Track C)
+
+        _DRUMS = DrumEngine()
+    return _DRUMS
+
+
 def _do_tone_transfer(inp: Dict[str, Any]) -> Dict[str, Any]:
+    """Engine-agnostic tone-transfer wrapper.
+
+    Every engine implements the same contract: `render(audio: np.ndarray, sr: int, inp: dict)
+    -> (out: np.ndarray, out_sr: int, extra_meta: dict)`. The wrapper handles R2 in/out;
+    the engine class handles the actual re-voicing.
+    """
     import soundfile as sf
 
+    engine = inp.get("engine", "ddsp")
     audio_key = inp["audio_key"]
-    instrument = inp.get("instrument", "violin")
-    mode = inp.get("mode", "mono")
     output_key = inp["output_key"]
     bucket = inp.get("bucket") or R2_BUCKET_DEFAULT
 
     s3 = _r2_client()
-    eng = _get_ddsp()
     with tempfile.TemporaryDirectory() as tmp:
         local_in = str(Path(tmp) / Path(audio_key).name)
         s3.download_file(bucket, audio_key, local_in)
         audio, sr = sf.read(local_in, dtype="float32")
-        # Stage 2 (poly multi-voice) not yet implemented — fall back to mono for now.
-        out, osr = eng.render_mono(audio, sr, instrument)
+
+        if engine == "ddsp":
+            instrument = inp.get("instrument", "violin")
+            mode = inp.get("mode", "mono")
+            # Stage 2 (poly multi-voice) not yet implemented — fall back to mono for now.
+            out, osr = _get_ddsp().render_mono(audio, sr, instrument)
+            extra = {"instrument": instrument, "mode": mode}
+        elif engine == "after":
+            # Track A — placeholder until after_engine.py + weights land.
+            raise NotImplementedError(
+                "AFTER engine not deployed yet (Track A). Payload was accepted for future compat."
+            )
+        elif engine == "drums":
+            # Track C — placeholder until drum_engine.py + weights land.
+            raise NotImplementedError(
+                "Drums engine not deployed yet (Track C). Payload was accepted for future compat."
+            )
+        else:
+            raise ValueError(f"unknown engine: {engine!r} (expected one of: ddsp, after, drums)")
+
         local_out = str(Path(tmp) / "out.flac")
         sf.write(local_out, out, osr)
         s3.upload_file(
             local_out, bucket, output_key, ExtraArgs={"ContentType": "audio/flac"}
         )
-    return {"output_key": output_key, "instrument": instrument, "mode": mode, "sr": osr}
+
+    return {"output_key": output_key, "engine": engine, "sr": osr, **extra}
 
 
 def handler(job: Dict[str, Any]) -> Dict[str, Any]:
