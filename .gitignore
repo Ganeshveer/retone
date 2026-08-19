@@ -31,10 +31,15 @@ frontend/stats.html
 *.safetensors
 runpod/models/
 runpod/weights/
+# AFTER's TorchScript checkpoints (200-400 MB each — past GitHub's 100MB/file cap)
+# are fetched at Dockerfile-build time via runpod/download_models.py, never committed.
+# Scoped narrowly to runpod/after_models/ so it doesn't collide with frontend TypeScript.
+runpod/after_models/*.ts
 # ...except the small DDSP worker weights that must ship in the image (< GitHub 100MB/file):
 !runpod/ddsp_models/violin.pth
 !runpod/ddsp_models/violin48.pth
 !runpod/vendor/ddsp_pytorch/components/ptcrepe/ptcrepe/crepe-full.pth
+!runpod/after_models/.gitkeep
 
 # --- Audio scratch (local test artifacts) ---
 scratch/

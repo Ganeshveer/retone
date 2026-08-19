@@ -23,10 +23,15 @@ from ..storage import Storage
 
 # --- Per-engine instrument catalogues ---
 # The frontend queries these via /meta/{engine}-instruments to populate its dropdown.
-# Only violin is currently deployed on the worker; Tracks A/C populate their own lists.
+# Names must match the MODELS dict keys in runpod/{engine}_engine.py exactly.
 DDSP_INSTRUMENTS = ["violin"]
-AFTER_INSTRUMENTS: list[str] = []   # populated once Track A weights land
-DRUM_KITS: list[str] = []           # populated once Track C weights land
+AFTER_INSTRUMENTS = [
+    "orchestral",   # piano → strings + brass ensemble (this session's demo target)
+    "instruments",  # piano/guitar → any-instrument (general audio-to-audio)
+    "drums_v1",     # older AFTER drum-transfer (fallback while Track C IDM lands)
+    "speech",       # voice-to-voice timbre transfer (curiosity)
+]
+DRUM_KITS: list[str] = []           # populated once Track C IDM weights land
 
 
 # In-flight tone-transfer counter (module-scope). Guards against scaling workers to 0

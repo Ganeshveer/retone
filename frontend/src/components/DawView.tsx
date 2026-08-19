@@ -39,13 +39,19 @@ export default function DawView({ project, onBack }: Props) {
   const [stemInstruments, setStemInstruments] = useState<Record<string, string | null>>({});
   const [instLoading, setInstLoading] = useState(false);
   const [ddspInstruments, setDdspInstruments] = useState<string[]>([]);
+  const [afterInstruments, setAfterInstruments] = useState<string[]>([]);
 
-  // DDSP timbre-transfer instruments available on the worker (empty if RunPod not configured).
+  // Timbre-transfer instruments available on the worker (empty if RunPod not configured).
+  //   DDSP  = mono-pitched engine (Engine 1). AFTER = polyphonic engine (Engine 2 / Track A).
   useEffect(() => {
     api
       .ddspInstruments()
       .then((list) => setDdspInstruments(list))
       .catch(() => setDdspInstruments([]));
+    api
+      .afterInstruments()
+      .then((list) => setAfterInstruments(list))
+      .catch(() => setAfterInstruments([]));
   }, []);
 
   useEffect(() => {
@@ -114,11 +120,15 @@ export default function DawView({ project, onBack }: Props) {
     ? project.stems.find((s) => s.name === activeStemName) ?? null
     : null;
 
-  // Switch a stem to an instrument. Two engines:
-  //  • sampler (id = GM name)   → replay the transcribed notes on a sampler
-  //  • DDSP    (id = "ddsp:x")  → re-voice the ACTUAL audio as instrument x (same performance),
-  //                               rendered on RunPod, swapped in as the stem's buffer
-  //  • null / ""                → restore the original audio
+  // Switch a stem to an instrument. Three engines + sampler + null:
+  //  • sampler  (id = GM name)     → replay the transcribed notes on a sampler
+  //  • DDSP     (id = "ddsp:x")    → re-voice the ACTUAL audio via the mono-pitched DDSP engine
+  //  • AFTER    (id = "after:x")   → re-voice via the polyphonic latent-diffusion engine (Track A)
+  //  • null/"" → restore the original audio
+  // Any "engine-render" mode ({ddsp,after}:*) writes to the stem's buffer via swapBuffer.
+  const isEngineRender = (v: string | null | undefined) =>
+    !!v && (v.startsWith("ddsp:") || v.startsWith("after:"));
+
   const handleInstrumentChange = async (
     stemName: string,
     id: string | null,
@@ -129,28 +139,30 @@ export default function DawView({ project, onBack }: Props) {
     const prev = stemInstruments[stemName] ?? null;
     eng.setStemNotes(stemName, notes);
 
-    if (id && id.startsWith("ddsp:")) {
-      const instrument = id.slice(5);
+    // Any engine-based re-voicing: DDSP or AFTER. Same swap-in flow; only the API call differs.
+    if (id && isEngineRender(id)) {
+      const engine = id.startsWith("ddsp:") ? "ddsp" : "after";
+      const instrument = id.slice(engine.length + 1); // strip "ddsp:" / "after:"
       setStemInstruments((p) => ({ ...p, [stemName]: id }));
       setInstLoading(true);
       try {
-        await eng.setStemInstrument(stemName, null); // sampler off — DDSP drives the audio
-        const { url } = await api.toneTransfer(project.id, stemName, instrument);
+        await eng.setStemInstrument(stemName, null); // sampler off — the engine drives the audio
+        const { url } = await api.toneTransfer(project.id, stemName, instrument, engine);
         const buf = await eng.decodeUrl(url);
         eng.swapBuffer(stemName, buf);
       } catch (e) {
         console.error("tone-transfer failed", e);
         setStemInstruments((p) => ({ ...p, [stemName]: prev }));
         const orig = eng.getOriginalBuffer(stemName);
-        if (!prev?.startsWith("ddsp:") && orig) eng.swapBuffer(stemName, orig);
+        if (!isEngineRender(prev) && orig) eng.swapBuffer(stemName, orig);
       } finally {
         setInstLoading(false);
       }
       return;
     }
 
-    // Sampler or original: if a DDSP render was swapped in, restore the original audio first.
-    if (prev?.startsWith("ddsp:")) {
+    // Sampler or original: if any engine render was swapped in, restore the original audio first.
+    if (isEngineRender(prev)) {
       const orig = eng.getOriginalBuffer(stemName);
       if (orig) eng.swapBuffer(stemName, orig);
     }
@@ -252,6 +264,7 @@ export default function DawView({ project, onBack }: Props) {
           instrument={stemInstruments[activeStem.name] ?? null}
           instrumentLoading={instLoading}
           ddspInstruments={ddspInstruments}
+          afterInstruments={afterInstruments}
           onBack={() => setMode("tracks")}
           onNotesChanged={(n) => handleNotesChanged(activeStem.name, n)}
           onInstrumentChange={(id, n) => handleInstrumentChange(activeStem.name, id, n)}

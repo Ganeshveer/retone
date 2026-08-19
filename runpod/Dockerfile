@@ -25,12 +25,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 # torchaudio matched to the base torch 2.7.1 (cu128) — used by the DDSP f0 extractor.
 RUN pip install --no-cache-dir torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
 
-COPY runpod/models.json runpod/separator_engine.py runpod/download_models.py runpod/handler.py runpod/ddsp_engine.py ./
+COPY runpod/models.json runpod/separator_engine.py runpod/download_models.py runpod/handler.py runpod/ddsp_engine.py runpod/after_engine.py ./
 # DDSP timbre transfer: vendored model code + baked weights (violin + CREPE).
 COPY runpod/vendor ./vendor
 COPY runpod/ddsp_models ./ddsp_models
+# AFTER polyphonic timbre transfer: reference audio clips (small — committed) + model
+# weights (large .ts, ~1 GB total across 4 checkpoints — fetched at build via download_models.py).
+COPY runpod/after_refs ./after_refs
+COPY runpod/after_models ./after_models
 
-# Bake separation model weights into the image (best-effort; falls back to runtime download).
+# Bake separation + AFTER model weights into the image (best-effort; falls back to runtime download).
 RUN python download_models.py
 
 # RunPod invokes the handler; the SDK owns the process loop.

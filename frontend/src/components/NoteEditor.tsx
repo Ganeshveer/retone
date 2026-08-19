@@ -28,6 +28,7 @@ interface Props {
   instrument?: string | null;
   instrumentLoading?: boolean;
   ddspInstruments?: string[];
+  afterInstruments?: string[];
   onBack: () => void;
   onNotesChanged: (notes: Note[]) => void;
   onInstrumentChange?: (id: string | null, notes: Note[]) => void;
@@ -38,6 +39,15 @@ const DDSP_LABELS: Record<string, string> = {
   saxophone: "Saxophone",
   flute: "Flute",
   trumpet: "Trumpet",
+};
+
+// AFTER (ACIDS-IRCAM latent diffusion) — polyphonic timbre transfer, Track A.
+// Names match backend AFTER_INSTRUMENTS + worker after_engine.py MODELS keys.
+const AFTER_LABELS: Record<string, string> = {
+  orchestral: "Orchestral ensemble (strings + brass)",
+  instruments: "Any instrument (general)",
+  drums_v1: "Drum kit (AFTER v1)",
+  speech: "Speech / vocal timbre",
 };
 
 interface Layout {
@@ -67,6 +77,7 @@ export default function NoteEditor({
   instrument,
   instrumentLoading,
   ddspInstruments,
+  afterInstruments,
   onBack,
   onNotesChanged,
   onInstrumentChange,
@@ -422,10 +433,19 @@ export default function NoteEditor({
               ))}
             </optgroup>
             {ddspInstruments && ddspInstruments.length > 0 && (
-              <optgroup label="Timbre transfer (DDSP)">
+              <optgroup label="Timbre transfer (DDSP · mono)">
                 {ddspInstruments.map((id) => (
                   <option key={`ddsp:${id}`} value={`ddsp:${id}`}>
                     {DDSP_LABELS[id] ?? id} — same performance
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {afterInstruments && afterInstruments.length > 0 && (
+              <optgroup label="Timbre transfer (AFTER · polyphonic)">
+                {afterInstruments.map((id) => (
+                  <option key={`after:${id}`} value={`after:${id}`}>
+                    {AFTER_LABELS[id] ?? id} — same performance
                   </option>
                 ))}
               </optgroup>

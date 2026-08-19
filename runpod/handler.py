@@ -156,10 +156,9 @@ def _do_tone_transfer(inp: Dict[str, Any]) -> Dict[str, Any]:
             out, osr = _get_ddsp().render_mono(audio, sr, instrument)
             extra = {"instrument": instrument, "mode": mode}
         elif engine == "after":
-            # Track A — placeholder until after_engine.py + weights land.
-            raise NotImplementedError(
-                "AFTER engine not deployed yet (Track A). Payload was accepted for future compat."
-            )
+            instrument = inp.get("instrument", "orchestral")
+            out, osr = _get_after().render(audio, sr, instrument)
+            extra = {"instrument": instrument}
         elif engine == "drums":
             # Track C — placeholder until drum_engine.py + weights land.
             raise NotImplementedError(

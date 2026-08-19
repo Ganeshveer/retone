@@ -111,16 +111,24 @@ export async function ddspInstruments(): Promise<string[]> {
   return r.instruments;
 }
 
+/** AFTER (ACIDS-IRCAM latent diffusion) instruments — polyphonic timbre transfer (Track A). */
+export async function afterInstruments(): Promise<string[]> {
+  const r = await json<{ instruments: string[] }>(
+    await fetch(`${API_BASE}/api/projects/meta/after-instruments`)
+  );
+  return r.instruments;
+}
+
 export async function toneTransfer(
   projectId: string,
   stemName: string,
-  instrument: string
-): Promise<{ status: string; instrument: string; url: string }> {
+  instrument: string,
+  engine: "ddsp" | "after" | "drums" = "ddsp"
+): Promise<{ status: string; engine: string; instrument: string; url: string }> {
+  const q = new URLSearchParams({ instrument, engine }).toString();
   return json(
     await fetch(
-      `${API_BASE}/api/projects/${projectId}/stems/${stemName}/tone-transfer?instrument=${encodeURIComponent(
-        instrument
-      )}`,
+      `${API_BASE}/api/projects/${projectId}/stems/${stemName}/tone-transfer?${q}`,
       { method: "POST" }
     )
   );
