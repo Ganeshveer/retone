@@ -48,6 +48,8 @@ tmp/
 *.flac
 *.mp3
 !frontend/public/**/*.mp3
+# AFTER's canonical timbre-reference clips ship with the worker (~500KB each × 4 = 2MB).
+!runpod/after_refs/*.wav
 
 # --- OS / editor ---
 .DS_Store
