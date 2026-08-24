@@ -34,7 +34,28 @@ def _cpu_quota():
     return os.cpu_count() or 4
 
 
+def _mem_limit_gb():
+    """Real memory ceiling for THIS pod. free/psutil report the HOST's RAM (503 GB
+    here) while the cgroup allows 50 GB — the same host-vs-pod trap as nproc."""
+    for f in ("/sys/fs/cgroup/memory.max",
+              "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            v = open(f).read().strip()
+            if v != "max":
+                b = int(v)
+                if b < (1 << 62):          # sentinel for "unlimited"
+                    return b / 1e9
+        except Exception:
+            pass
+    try:
+        import os
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
+    except Exception:
+        return 8.0
+
+
 _CORES = _cpu_quota()
+_MEM_GB = _mem_limit_gb()
 
 CFG = dict(
     sample_rate=44100, n_fft=2048, hop_length=512, win_length=2048,
@@ -46,7 +67,7 @@ CFG = dict(
     batch_size=64,           # A40 48GB
     lr=3e-4, max_steps=200_000, warmup=2_000,
     val_every=2_000, save_every=2_500,
-    num_workers=max(2, _CORES - 2),
+    num_workers=int(os.environ.get("RETONE_WORKERS", 0)),
     seed=940513,
     amp_dtype="bf16",        # Ampere: native bf16, no GradScaler needed
     compile=True, tf32=True, prefetch=4,
@@ -62,28 +83,70 @@ random.seed(CFG["seed"]); np.random.seed(CFG["seed"]); torch.manual_seed(CFG["se
 from torch.utils.data import Dataset, DataLoader
 
 class PairDataset(Dataset):
-    def __init__(self, cache_dir, seq=CFG["seq_frames"]):
-        self.files = sorted(pathlib.Path(cache_dir).glob("pair_*.npz"))
-        self.seq = seq
-        if not self.files:
+    """All pairs held in RAM.
+
+    The .npz files are ~3 MB each decompressed; decompressing 64 of them per batch
+    made us completely dataloader-bound (0.3 it/s with the GPU at 0%). The whole
+    corpus is only ~1.2 GB and the pod has 503 GB, so we load once and slice.
+
+    Each file is also worth MANY training crops, not one: a 60 s file holds ~10
+    non-overlapping 5.9 s windows. Yielding one crop per file made an "epoch" just
+    3 batches, so the loader spent its life at epoch boundaries.
+    """
+
+    def __init__(self, cache_dir, seq=CFG["seq_frames"], crops_per_file=None):
+        files = sorted(pathlib.Path(cache_dir).glob("pair_*.npz"))
+        if not files:
             raise RuntimeError("no cached pairs in %s" % cache_dir)
+        self.seq = seq
+
+        # Estimate the footprint before committing to a preload. Exceeding the pod's
+        # cgroup limit gets the process OOM-killed with no useful traceback.
+        probe = np.load(files[0])
+        per_file_mb = (probe["roll"].nbytes + probe["mel"].nbytes) / 1e6
+        est_gb = per_file_mb * len(files) / 1000
+        budget_gb = _MEM_GB * 0.5          # leave room for torch, CUDA context, compile cache
+        if est_gb > budget_gb:
+            raise RuntimeError(
+                "dataset needs ~%.1f GB but only ~%.1f GB of the pod's %.0f GB is safe to use. "
+                "Either shard the cache, shorten `seconds` in dataprep, or switch to a "
+                "memmap/lazy loader." % (est_gb, budget_gb, _MEM_GB))
+
+        self.rolls, self.mels = [], []
+        for f in files:
+            d = np.load(f)
+            roll, mel = d["roll"], d["mel"]           # keep fp16 in RAM
+            T = min(roll.shape[2], mel.shape[1])
+            if T < seq:
+                continue
+            self.rolls.append(np.ascontiguousarray(roll[:, :, :T]))
+            self.mels.append(np.ascontiguousarray(mel[:, :T]))
+        if not self.rolls:
+            raise RuntimeError("every pair in %s was shorter than %d frames" % (cache_dir, seq))
+        med = int(np.median([r.shape[2] for r in self.rolls]))
+        self.crops = crops_per_file or max(1, med // seq)
+        mb = sum(r.nbytes + m.nbytes for r, m in zip(self.rolls, self.mels)) / 1e6
+        print("  dataset: %d files, %.0f MB in RAM (%.0f GB pod limit), %d crops/file "
+              "-> %d samples/epoch"
+              % (len(self.rolls), mb, _MEM_GB, self.crops,
+                 len(self.rolls) * self.crops), flush=True)
 
     def __len__(self):
-        return len(self.files)
+        return len(self.rolls) * self.crops
 
     def __getitem__(self, i):
-        d = np.load(self.files[i])
-        roll, mel = d["roll"].astype(np.float32), d["mel"].astype(np.float32)
-        T = min(roll.shape[2], mel.shape[1])
-        # Random crop offset. Never crop on note boundaries, or the model only ever
-        # sees clean attacks and never learns to continue an already-sounding note.
+        j = i // self.crops
+        roll, mel = self.rolls[j], self.mels[j]
+        T = roll.shape[2]
+        # Random offset, never aligned to note boundaries.
         s = random.randint(0, max(0, T - self.seq))
-        roll, mel = roll[:, :, s:s + self.seq], mel[:, s:s + self.seq]
-        if roll.shape[2] < self.seq:
-            pad = self.seq - roll.shape[2]
-            roll = np.pad(roll, ((0, 0), (0, 0), (0, pad)))
-            mel = np.pad(mel, ((0, 0), (0, pad)), constant_values=MEL_MEAN - 2 * MEL_STD)
-        return torch.from_numpy(roll), torch.from_numpy((mel - MEL_MEAN) / MEL_STD)
+        r = roll[:, :, s:s + self.seq].astype(np.float32)
+        m = mel[:, s:s + self.seq].astype(np.float32)
+        if r.shape[2] < self.seq:
+            pad = self.seq - r.shape[2]
+            r = np.pad(r, ((0, 0), (0, 0), (0, pad)))
+            m = np.pad(m, ((0, 0), (0, pad)), constant_values=MEL_MEAN - 2 * MEL_STD)
+        return torch.from_numpy(r), torch.from_numpy((m - MEL_MEAN) / MEL_STD)
 
 
 def make_loaders(cache_dir=None, val_frac=0.05):
