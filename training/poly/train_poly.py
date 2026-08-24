@@ -42,6 +42,17 @@ def main():
         unwrap(model).load_state_dict(ck["model"])
         opt.load_state_dict(ck["opt"]); sched.load_state_dict(ck["sched"]); step = ck["step"]
         print("resumed @ %d" % step, flush=True)
+    # On resume, seed `best` from the existing best.pt or the first val after resume
+    # is auto-crowned and overwrites a genuinely-better checkpoint.
+    best_ckpt = CKPT_DIR / "best.pt"
+    if best_ckpt.exists():
+        try:
+            prev = torch.load(best_ckpt, map_location="cpu", weights_only=True)
+            if isinstance(prev, dict) and "val" in prev:
+                best = float(prev["val"])
+                print("resumed best-val=%.4f from best.pt" % best, flush=True)
+        except Exception as e:
+            print("could not read prior best.pt val: %s" % e, flush=True)
 
     model.train(); t0 = time.time(); tlast = t0
     while step < CFG["max_steps"]:

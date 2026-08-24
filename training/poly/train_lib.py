@@ -94,11 +94,12 @@ class PairDataset(Dataset):
     3 batches, so the loader spent its life at epoch boundaries.
     """
 
-    def __init__(self, cache_dir, seq=CFG["seq_frames"], crops_per_file=None):
+    def __init__(self, cache_dir, seq=CFG["seq_frames"], crops_per_file=None, augment=False):
         files = sorted(pathlib.Path(cache_dir).glob("pair_*.npz"))
         if not files:
             raise RuntimeError("no cached pairs in %s" % cache_dir)
         self.seq = seq
+        self.augment = augment
 
         # Estimate the footprint before committing to a preload. Exceeding the pod's
         # cgroup limit gets the process OOM-killed with no useful traceback.
@@ -146,15 +147,62 @@ class PairDataset(Dataset):
             pad = self.seq - r.shape[2]
             r = np.pad(r, ((0, 0), (0, 0), (0, pad)))
             m = np.pad(m, ((0, 0), (0, pad)), constant_values=MEL_MEAN - 2 * MEL_STD)
+
+        if self.augment:
+            m, r = self._augment(m, r)
+
         return torch.from_numpy(r), torch.from_numpy((m - MEL_MEAN) / MEL_STD)
+
+    def _augment(self, m, r):
+        """Break the determinism of soundfont rendering.
+
+        audio = FluidR3(MIDI) is an EXACT function: same note+velocity gives
+        byte-identical samples. A model trained on that learns to imitate one
+        soundfont rather than to generalize, and the loss looks great while the
+        model is quietly narrow. These perturbations are all things that vary in
+        real recordings but never vary in our renders.
+
+        Mel is log-magnitude, so a gain change is an ADDITIVE offset, not a multiply.
+        """
+        # overall level (log domain: +-3 dB-ish)
+        m = m + np.float32(random.uniform(-0.35, 0.35))
+
+        # spectral tilt — stands in for mic/room/EQ differences
+        if random.random() < 0.6:
+            tilt = np.linspace(random.uniform(-0.3, 0.3), random.uniform(-0.3, 0.3),
+                               m.shape[0], dtype=np.float32)
+            m = m + tilt[:, None]
+
+        # noise floor — real recordings have one, soundfont renders do not
+        if random.random() < 0.5:
+            m = m + np.random.randn(*m.shape).astype(np.float32) * random.uniform(0.01, 0.06)
+
+        # SpecAugment-style masking: forces reliance on the CONDITIONING rather than
+        # on neighbouring mel context, which is what we actually want at inference.
+        if random.random() < 0.3:
+            f = random.randint(1, 8); f0 = random.randint(0, max(1, m.shape[0] - f))
+            m[f0:f0 + f, :] = MEL_MEAN - 2 * MEL_STD
+
+        # velocity jitter on the CONDITIONING, so the model does not treat the
+        # soundfont's exact velocity->timbre curve as gospel
+        if random.random() < 0.4:
+            v = r[2] > 0
+            r[2][v] = np.clip(r[2][v] * random.uniform(0.85, 1.15), 0.01, 1.0)
+
+        return m, r
 
 
 def make_loaders(cache_dir=None, val_frac=0.05):
-    ds = PairDataset(cache_dir or CACHE_DIR)
-    n_val = max(1, int(len(ds) * val_frac))
-    tr, va = torch.utils.data.random_split(
-        ds, [len(ds) - n_val, n_val],
-        generator=torch.Generator().manual_seed(CFG["seed"]))
+    # Two views of the same cache: augmented for train, clean for val.
+    # Validating on augmented data would measure the wrong thing.
+    ds_tr = PairDataset(cache_dir or CACHE_DIR, augment=True)
+    ds_va = PairDataset(cache_dir or CACHE_DIR, augment=False)
+    n = len(ds_tr)
+    n_val = max(1, int(n * val_frac))
+    g = torch.Generator().manual_seed(CFG["seed"])
+    perm = torch.randperm(n, generator=g).tolist()
+    tr = torch.utils.data.Subset(ds_tr, perm[n_val:])
+    va = torch.utils.data.Subset(ds_va, perm[:n_val])
     nw = CFG["num_workers"]
     kw = dict(batch_size=CFG["batch_size"], num_workers=nw, pin_memory=True,
               persistent_workers=nw > 0)
