@@ -14,6 +14,7 @@ for the full walkthrough and the ML-approach postmortem.
 | `render_direct.py`           | Main entrypoint. CLI + reusable `render_one()` API + transcriber dispatch (`basic_pitch`, `bytedance_piano`, `transkun`). |
 | `render_multi_song.py`       | Batch: several source songs × the same target set. Auto-picks transcriber per source. |
 | `render_transcriber_ab.py`   | Same source, same target, different transcriber — for A/B'ing which transcriber to standardize on. |
+| `render_variety.py`          | Wider variety batch: 8 sources × 12 diverse targets, transcription cached per source (12× fewer transcribe calls than naïve `render_one` loops). Reads/adapts from anywhere — set `SOURCES` / `TARGETS` at the top. |
 
 ## Install
 
@@ -85,6 +86,10 @@ python render_multi_song.py
 
 # Transcriber A/B on 3 piano songs × 3 transcribers × 6 targets = 54 renders.
 python render_transcriber_ab.py
+
+# Variety pack: 8 popular instrumentals × 12 targets across all families = 104 renders.
+# Uses cached transcription per source — one transcribe call reused across 12 targets.
+python render_variety.py
 ```
 
 ## Transcriber cheatsheet

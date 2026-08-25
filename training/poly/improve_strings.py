@@ -35,11 +35,19 @@ import dataprep as dp
 
 
 def sf_tag(path):
-    """3-6 char label for the soundfont — used in output filenames."""
+    """Short label for the soundfont — used in output filenames.
+    Recognises Sonatina strings variants explicitly so filenames encode
+    which section (violin/viola/cello/bass) the crop came from."""
     stem = Path(path).stem.lower()
+    # Sonatina strings — most useful diversity axis
+    if "1st violin" in stem: return "sonatv1"
+    if "2nd violin" in stem: return "sonatv2"
+    if "viola"      in stem: return "sonatvla"
+    if "celli"      in stem or "cello" in stem: return "sonatvc"
+    if "bass"       in stem: return "sonatcb"
     for kw in ("fluidr3", "vsco", "generaluser", "sonatina", "salamander"):
         if kw in stem:
-            return kw[:6]
+            return kw[:8]
     return hashlib.md5(path.encode()).hexdigest()[:6]
 
 

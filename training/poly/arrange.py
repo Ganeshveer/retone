@@ -48,6 +48,28 @@ def _alberti_order(n):
 
 # ─────────────────────────────── strings ─────────────────────────────────────
 
+def arrange_for_piano_sustain(pm, extend_s=0.30, min_note_len_for_ext_s=0.10):
+    """Light note-end extension for piano TARGET when input was already piano.
+
+    Basic Pitch strips real sustain-pedal information — every note ends when
+    it fell below the frame threshold. The transcribed MIDI then reads as a
+    series of short percussive attacks. Rendering that through the piano
+    model produces the "chords hit hard, no sustain" complaint.
+
+    This function extends each already-substantive note by up to extend_s to
+    partially recover the pedaled feel. Not arpeggiation — no new notes are
+    added and pitch structure is untouched. Just longer envelopes.
+    """
+    all_notes = [n for (n, _) in _all_notes(pm)]
+    if not all_notes:
+        return pm
+    for n in all_notes:
+        if (n.end - n.start) < min_note_len_for_ext_s:
+            continue                                    # leave staccato/graces alone
+        n.end = n.end + extend_s
+    return pm
+
+
 def arrange_for_strings(pm,
                         max_hold_s=0.8,
                         min_note_len_for_hold_s=0.20,

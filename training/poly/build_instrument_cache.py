@@ -42,6 +42,10 @@ def main():
                     help="glob **/*.midi from here")
     ap.add_argument("--midi-limit", type=int, default=300,
                     help="cap on MIDIs to render. 300 × 60 s = ~5 h of data, plenty.")
+    ap.add_argument("--midi-offset", type=int, default=0,
+                    help="skip the first N MIDIs of the shuffled list — use to append fresh data to an existing cache without re-rendering.")
+    ap.add_argument("--filename-prefix", default="pair_",
+                    help="output filename prefix — change (e.g. 'pair_p2_') when appending to an existing cache so files don't collide.")
     ap.add_argument("--seconds", type=int, default=60)
     ap.add_argument("--program", type=int, default=0,
                     help="MIDI program to force. Sonatina single-instrument SF2s ignore this and play their sole preset either way.")
@@ -64,7 +68,7 @@ def main():
         print(f"NO MIDIs under {args.midi_dir}"); return
     rng = random.Random(940513)
     rng.shuffle(midi_files)
-    midi_files = midi_files[:args.midi_limit]
+    midi_files = midi_files[args.midi_offset : args.midi_offset + args.midi_limit]
     print(f"[{args.instrument}] rendering {len(midi_files)} MIDIs through {Path(args.sf2).name}")
 
     # Point dataprep at the requested SF2 + program for the duration of this render.
@@ -75,7 +79,8 @@ def main():
         dp.PROGRAMS[args.instrument] = args.program
         # dataprep.build renders + caches (roll, mel) pairs. Uses "pair_" prefix
         # by default, matches PairDataset's glob.
-        dp.build(midi_files, args.instrument, str(cache_dir), seconds=args.seconds)
+        dp.build(midi_files, args.instrument, str(cache_dir),
+                 seconds=args.seconds, filename_prefix=args.filename_prefix)
     finally:
         dp.SF2, dp.PROGRAMS = orig_sf, orig_progs
 
