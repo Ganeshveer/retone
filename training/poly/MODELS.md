@@ -18,12 +18,30 @@ Weights are on Hugging Face — this repo doesn't ship them (each is 268–759 M
 ```python
 from huggingface_hub import hf_hub_download
 path = hf_hub_download(
-    repo_id="Ganeshveer/retone-poly",
+    repo_id="Ganeshveeer/retone-poly",
     filename="piano/best_pre_realdata.pt",   # or "strings/best.pt", etc.
 )
 ```
 
-Model repo URL: <https://huggingface.co/Ganeshveer/retone-poly>
+Model repo URL: <https://huggingface.co/Ganeshveeer/retone-poly>
+
+## Strings quality: next iteration data
+
+Val 0.116 on FluidR3-only produced a thin, harsh render — one-soundfont overfit.
+The cheapest attack is **multi-soundfont diversity + one real-audio source**,
+all direct-downloadable, all under 6 GB combined, no request forms:
+
+| Source | Size | What we do with it | URL |
+|---|---|---|---|
+| Sonatina Symphonic Orchestra (SF2) | 488 MB | Second SF2 for MAESTRO strings render | `https://archive.org/download/SonatinaSymphonicOrchestraSF2/Sonatina%20Symphonic%20Orchestra%20SF2.zip` |
+| VSCO 2 CE (SFZ) | 9 GB (optional) | Third SF2 variant if disk allows | `https://www.dropbox.com/s/p2p6whunwekb9s1/VSCO-2-CE-1.1.0.zip?dl=1` |
+| CocoChorales strings shard 1 | 5.1 GB | 40 h of MIDI-DDSP string quartets + aligned MIDI — genuinely different timbre from FluidR3 | `https://storage.googleapis.com/magentadata/datasets/cocochorales/cocochorales_full_v1_zipped/main_dataset/train/1.tar.bz2` |
+| Bach Violin Dataset | 266 MB | 6.5 h real solo-violin recordings + score alignments | `https://zenodo.org/records/6050245/files/bach-violin-dataset-v1.0.zip?download=1` |
+| MusicNet | 11.1 GB | Slice via `musicnet_metadata.csv` to Solo Violin / String Quartet subset (~4-6 GB after filter) | `https://zenodo.org/records/5120004/files/musicnet.tar.gz?download=1` |
+
+`improve_strings.py` handles the SF2 side (multi-soundfont render + FluidR3
+crop pruning). Real-audio ingestion for CocoChorales / Bach Violin lands in a
+sibling script the next iteration.
 
 ## Rerunning training
 
@@ -45,7 +63,7 @@ mkdir -p ckpt/piano ckpt/strings
 python -c "from huggingface_hub import hf_hub_download; \
            import shutil; \
            for f in ['piano/latest.pt', 'strings/latest.pt']: \
-               p = hf_hub_download('Ganeshveer/retone-poly', f); shutil.copy(p, f'ckpt/{f}')"
+               p = hf_hub_download('Ganeshveeer/retone-poly', f); shutil.copy(p, f'ckpt/{f}')"
 
 # 4. train — resumes from ckpt/<inst>/latest.pt if present; the resume patch
 #    (train_poly.py:45) also reads best.pt's val so it isn't clobbered.
