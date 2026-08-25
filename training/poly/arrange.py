@@ -26,6 +26,7 @@ Two transforms, keyed by target instrument:
     onset in its voice (nearest-neighbor within ±3 semitones), capped at
     +2 s, with a 40 ms legato overlap between consecutive notes in a voice.
 """
+import numpy as np
 import pretty_midi
 
 
@@ -53,18 +54,31 @@ def _alberti_order(n):
 
 
 def arrange_for_piano(pm,
-                      chord_window_s=0.025,
+                      chord_window_s=0.06,
                       roll_step_s=0.025,
-                      restrike_period_s=0.30,
-                      restrike_min_hold_s=0.40,
-                      restrike_len_s=0.15,
-                      restrike_vel_frac=0.60):
+                      arp_min_hold_s=0.35,
+                      arp_min_notes=4,
+                      arp_note_len_s=0.12,
+                      preserve_attack_s=0.08,
+                      arp_vel_frac=0.75,
+                      max_end_stdev_s=0.15):
+    """Sustained N-note chord clusters get REPLACED, in place, with a rolling
+    Alberti-style arpeggio for their sustained portion. The initial attack of
+    the original chord is preserved (~preserve_attack_s), then original notes
+    are truncated and the remainder is filled with broken-chord notes.
+
+    Why replace, not decorate: an earlier version added decorative restrikes on
+    top of the held chord, but the block chord underneath still dominated — the
+    render still sounded "hit and hold." Real pianists don't hold a big chord to
+    imitate strings; they play a rolling pattern from the outset (Alberti bass,
+    broken thirds, murky bass). This function does that.
+    """
     all_notes = [n for (n, _) in _all_notes(pm)]
     if not all_notes:
         return pm
     all_notes.sort(key=lambda n: n.start)
 
-    # 1) build clusters (onsets within chord_window_s)
+    # 1) build clusters using wider window (Basic Pitch onset jitter ~20-40 ms)
     clusters = []
     cur = [all_notes[0]]
     for n in all_notes[1:]:
@@ -74,54 +88,87 @@ def arrange_for_piano(pm,
             clusters.append(cur); cur = [n]
     clusters.append(cur)
 
-    # 2) roll clusters of 3+ notes
+    # 2) roll onsets of 3+ note clusters (staggered ascending)
     for cl in clusters:
-        if len(cl) < 3:
+        if len(cl) < arp_min_notes:
             continue
         cl.sort(key=lambda n: n.pitch)
         base = cl[0].start
         for i, n in enumerate(cl):
-            # preserve total duration by shifting BOTH start and end
             dur = n.end - n.start
             n.start = base + i * roll_step_s
             n.end = n.start + dur
 
-    # 3) restrike inner voices during held clusters
-    new_notes = []
+    # 3) REPLACE the sustained portion of long-held clusters with an arpeggio.
+    #    Two guards to avoid over-arpeggiating REAL piano performances:
+    #      (a) require the COMMON hold (min end - start) to be > arp_min_hold_s
+    #          so we only fire on uniformly-sustained chords (bowed strings) and
+    #          NOT on piano-style block chords where notes decay independently.
+    #      (b) require the stdev of note ends to be small — a real piano attack
+    #          has notes ending at wildly different times (release+decay+damper);
+    #          a bowed string chord has all voices ending near-simultaneously.
+    arp_notes = []
     for cl in clusters:
-        if len(cl) < 3:
+        if len(cl) < arp_min_notes:
             continue
         cl_start = min(n.start for n in cl)
-        cl_end = min(n.end for n in cl)              # only during the SHORTEST-held voice
-        hold = cl_end - cl_start
-        if hold < restrike_min_hold_s:
-            continue
-        cl_sorted = sorted(cl, key=lambda n: n.pitch)
-        order = _alberti_order(len(cl_sorted))
-        n_hits = max(0, int(hold / restrike_period_s) - 1)
-        for k in range(n_hits):
-            t = cl_start + (k + 1) * restrike_period_s
-            if t >= cl_end - 0.05:
-                break
-            src = cl_sorted[order[k % len(order)]]
-            new_notes.append(pretty_midi.Note(
-                velocity=max(20, int(src.velocity * restrike_vel_frac)),
-                pitch=src.pitch,
-                start=t,
-                end=min(t + restrike_len_s, cl_end - 0.02),
-            ))
+        cl_end   = max(n.end   for n in cl)
+        common_end = min(n.end for n in cl)
+        common_hold = common_end - cl_start
+        end_stdev = float(np.std([n.end for n in cl])) if len(cl) > 1 else 0.0
 
-    if new_notes:
-        # dump into first instrument (transcriber usually emits just one)
-        (pm.instruments[0] if pm.instruments
-         else pm.instruments.append(pretty_midi.Instrument(program=0)) or pm.instruments[0]).notes.extend(new_notes)
+        # gate (a): common hold long enough
+        if common_hold < arp_min_hold_s:
+            continue
+        # gate (b): note ends bunched — chord released as one, not piano decay
+        if end_stdev > max_end_stdev_s:
+            continue
+
+        arp_start = cl_start + preserve_attack_s
+        # truncate original notes so the arpeggio replaces the sustain
+        for n in cl:
+            n.end = min(n.end, cl_start + preserve_attack_s + 0.02)
+
+        cl_sorted = sorted(cl, key=lambda n: n.pitch)
+        pitches = [n.pitch for n in cl_sorted]
+        base_vel = int(np.mean([n.velocity for n in cl_sorted]) * arp_vel_frac) if pitches else 60
+        # Alberti/interleaved order — creates the "rock back and forth" motion
+        order = _alberti_order(len(pitches))
+
+        t = arp_start
+        k = 0
+        while t + 0.5 * arp_note_len_s < cl_end:
+            p = pitches[order[k % len(order)]]
+            arp_notes.append(pretty_midi.Note(
+                velocity=max(30, min(110, base_vel)),
+                pitch=p,
+                start=t,
+                end=min(t + arp_note_len_s * 0.95, cl_end - 0.005),  # tiny gap between arp notes
+            ))
+            t += arp_note_len_s
+            k += 1
+
+    if arp_notes:
+        target = pm.instruments[0] if pm.instruments else None
+        if target is None:
+            target = pretty_midi.Instrument(program=0)
+            pm.instruments.append(target)
+        target.notes.extend(arp_notes)
+
+    # Purge any notes whose end fell before start after truncation
+    for inst in pm.instruments:
+        inst.notes = [n for n in inst.notes if n.end > n.start + 0.005]
     return pm
 
 
 def arrange_for_strings(pm,
-                        max_hold_s=2.0,
+                        max_hold_s=0.8,
+                        min_note_len_for_hold_s=0.20,
                         legato_overlap_s=0.04,
                         voice_semitone_window=3):
+    """Bowed sustain — but only for notes that were ALREADY held long enough to be
+    genuine sustained tones. Short attack notes (<200 ms) stay short; extending them
+    over-sustains the render and sounded worse than PLAIN on some test material."""
     """Extend each note to the next onset in its voice (nearest pitch neighbor)."""
     all_notes = [n for (n, _) in _all_notes(pm)]
     if not all_notes:
@@ -130,6 +177,9 @@ def arrange_for_strings(pm,
 
     # for each note, find the next note within ±window semitones and after this note's start
     for i, n in enumerate(all_notes):
+        # skip staccato/attack-only notes — extending them over-sustains
+        if (n.end - n.start) < min_note_len_for_hold_s:
+            continue
         target_end = n.start + max_hold_s
         for j in range(i + 1, len(all_notes)):
             m = all_notes[j]

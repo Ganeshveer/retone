@@ -117,8 +117,14 @@ def audio_to_mel(y):
     return m.squeeze(0).numpy()
 
 
-def build(midi_files, instrument, out_dir, seconds=60, min_frames=512, verbose_every=25):
-    """Render + cache (roll, mel) pairs for one target instrument."""
+def build(midi_files, instrument, out_dir, seconds=60, min_frames=512,
+          verbose_every=25, filename_prefix="pair_"):
+    """Render + cache (roll, mel) pairs for one target instrument.
+
+    filename_prefix — output files are f"{filename_prefix}{index:05d}.npz".
+    Use to tag a multi-soundfont build so the corpus is auditable
+    (e.g. filename_prefix="pair_vsco_"). PairDataset globs "pair_*.npz" so
+    any prefix starting with "pair_" is picked up automatically."""
     out_dir = pathlib.Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     n_ok = n_skip = 0
     with tempfile.TemporaryDirectory() as tmp:
@@ -138,7 +144,7 @@ def build(midi_files, instrument, out_dir, seconds=60, min_frames=512, verbose_e
                 T = min(roll.shape[2], mel.shape[1])
                 if T < min_frames:
                     n_skip += 1; continue
-                np.savez_compressed(out_dir / f"pair_{n_ok:05d}.npz",
+                np.savez_compressed(out_dir / f"{filename_prefix}{n_ok:05d}.npz",
                                     roll=roll[:, :, :T].astype(np.float16),
                                     mel=mel[:, :T].astype(np.float16))
                 n_ok += 1
