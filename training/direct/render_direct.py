@@ -68,6 +68,26 @@ def transcribe_bytedance_piano(audio_path):
     return pm
 
 
+def transcribe_transkun(audio_path):
+    """Transkun (Yan, ISMIR 2024, MIT) — piano-only, ~97.5 F1 on MAESTRO,
+    best subjective quality of the pip-installable piano transcribers as of
+    late 2025. Requires `pip install transkun` (weights auto-downloaded).
+    Shells out to the `transkun` CLI. Accepts WAV only — convert OGG/FLAC/MP3
+    to WAV first with librosa.
+
+    Reference: [Transkun GitHub](https://github.com/Yujia-Yan/Transkun).
+    """
+    import subprocess
+    # Convert non-wav inputs upstream because transkun rejects them
+    with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as f:
+        out_mid = f.name
+    subprocess.run(["transkun", audio_path, out_mid], check=True,
+                   capture_output=True)
+    pm = pretty_midi.PrettyMIDI(out_mid)
+    os.unlink(out_mid)
+    return pm
+
+
 def _has_cuda():
     try:
         import torch
@@ -77,8 +97,9 @@ def _has_cuda():
 
 
 TRANSCRIBERS = {
-    "basic_pitch":       transcribe_basic_pitch,
-    "bytedance_piano":   transcribe_bytedance_piano,
+    "basic_pitch":       transcribe_basic_pitch,        # any polyphonic, ~85 F1, always available
+    "bytedance_piano":   transcribe_bytedance_piano,    # piano only, 96.72 F1, faster on GPU
+    "transkun":          transcribe_transkun,           # piano only, ~97.5 F1 (best on clean), slower
 }
 
 
@@ -170,7 +191,7 @@ def main():
     ap.add_argument("--outdir",  help="output directory (category mode)")
     ap.add_argument("--transcriber", default="basic_pitch",
                     choices=list(TRANSCRIBERS.keys()),
-                    help="basic_pitch (default, any polyphonic) OR bytedance_piano (best for piano input)")
+                    help="basic_pitch (any polyphonic) | bytedance_piano | transkun (both piano-only, higher F1)")
     ap.add_argument("--seconds", type=int, default=None,
                     help="clip render to first N seconds of the input")
     ap.add_argument("--reverb-wet", type=float, default=0.15,
