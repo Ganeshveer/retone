@@ -1,4 +1,22 @@
-# Polyphonic instrument conversion — training code
+# Polyphonic instrument conversion — training code (DEPRECATED as primary)
+
+> **This ML approach has been superseded** by the direct pipeline at
+> [`../direct/`](../direct/). Audible A/B testing showed raw SF2 renders beat
+> our best model output (`piano/best.pt` @ val 0.119 was still noticeably
+> worse than the FluidSynth target it was trained to imitate).
+>
+> **Kept here as reference** — model architecture, resume/rotator plumbing,
+> and augmentation code — plus warm-start material for any future ML attempt
+> that fixes the underlying mel+BigVGAN bottleneck (higher-res mel,
+> adversarial loss, direct-audio conditioning, or a codec-latent formulation
+> à la AFTER).
+>
+> Checkpoints stashed at
+> [Ganeshveeer/retone-poly on HF](https://huggingface.co/Ganeshveeer/retone-poly).
+> Postmortem in [`../../notebooks/direct_instrument_conversion.ipynb`](../../notebooks/direct_instrument_conversion.ipynb#10-the-ml-approach-we-tried--and-its-shortcomings).
+
+---
+
 
 Working implementation of the Stage-2 renderer from
 [`notebooks/train_poly_instrument_conversion.ipynb`](../../notebooks/train_poly_instrument_conversion.ipynb).
