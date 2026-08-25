@@ -64,7 +64,7 @@ CFG = dict(
     # ~57M params: inside the published 20-60M sweet spot for a single instrument
     hidden=768, n_layers=8, n_heads=12, dropout=0.1,
     seq_frames=512,          # ~5.9 s per example at 86.13 fps
-    batch_size=64,           # A40 48GB
+    batch_size=128,          # A40 48GB — piano used ~10 GB of 46 GB, headroom to 2×
     lr=3e-4, max_steps=200_000, warmup=2_000,
     val_every=2_000, save_every=2_500,
     num_workers=int(os.environ.get("RETONE_WORKERS", 0)),

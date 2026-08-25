@@ -22,7 +22,12 @@ converges vastly faster than training from random init.
 import argparse, glob, os, random, shutil, sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+# dataprep lives in this dir OR under lib/ depending on repo layout;
+# try both so the same script works locally and on the pod.
+_here = Path(__file__).parent
+for _cand in (_here, _here / "lib", _here.parent / "lib"):
+    if (_cand / "dataprep.py").exists():
+        sys.path.insert(0, str(_cand)); break
 import dataprep as dp
 
 

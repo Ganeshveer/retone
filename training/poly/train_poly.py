@@ -73,10 +73,15 @@ def main():
         except Exception as e:
             print("could not read prior best.pt val: %s" % e, flush=True)
 
+    # Rotator support: stop this run after N additional steps for round-robin
+    # training across instruments. Overall max_steps still governs total budget.
+    steps_this_run = int(os.environ.get("RETONE_MAX_STEPS_THIS_RUN", 0))
+    stop_at = (step + steps_this_run) if steps_this_run > 0 else CFG["max_steps"]
+
     model.train(); t0 = time.time(); tlast = t0
-    while step < CFG["max_steps"]:
+    while step < CFG["max_steps"] and step < stop_at:
         for roll, mel in train_loader:
-            if step >= CFG["max_steps"]:
+            if step >= CFG["max_steps"] or step >= stop_at:
                 break
             roll = roll.to(dev, non_blocking=True); mel = mel.to(dev, non_blocking=True)
             with torch.autocast("cuda", dtype=amp):
