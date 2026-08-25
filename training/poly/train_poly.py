@@ -42,7 +42,26 @@ def main():
         unwrap(model).load_state_dict(ck["model"])
         opt.load_state_dict(ck["opt"]); sched.load_state_dict(ck["sched"]); step = ck["step"]
         print("resumed @ %d" % step, flush=True)
-    # On resume, seed `best` from the existing best.pt or the first val after resume
+    else:
+        # No latest.pt — fall back to warm-starting from best.pt if present.
+        # best.pt has only {model, cfg, step, val}, no optimizer/scheduler state,
+        # so we load model weights only and start opt/sched fresh at step 0.
+        # Enables per-instrument fine-tuning: seed cache/violin/ckpt/best.pt
+        # from a related model (e.g. the strings ensemble) and this branch
+        # picks it up automatically.
+        warm = CKPT_DIR / "best.pt"
+        if warm.exists():
+            try:
+                ck = torch.load(warm, map_location=dev, weights_only=True)
+                unwrap(model).load_state_dict(ck["model"])
+                src_step = ck.get("step", "?")
+                src_val = ck.get("val", None)
+                val_str = f"{src_val:.4f}" if isinstance(src_val, float) else "n/a"
+                print("warm-start from best.pt (source step=%s val=%s) — fresh opt/sched, step reset to 0"
+                      % (src_step, val_str), flush=True)
+            except Exception as e:
+                print("warm-start FAILED: %s — starting fully fresh" % e, flush=True)
+    # Seed `best` from the existing best.pt or the first val after resume/warm-start
     # is auto-crowned and overwrites a genuinely-better checkpoint.
     best_ckpt = CKPT_DIR / "best.pt"
     if best_ckpt.exists():
