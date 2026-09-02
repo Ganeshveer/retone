@@ -71,6 +71,41 @@ render_one(
 )
 ```
 
+## Monophonic targets and accompaniment (Aug 2026)
+
+A real violin cannot bow six pitches at once. When you route polyphonic
+material into a monophonic target (`violin_solo`, `trumpet_solo`,
+`flute_solo`, sax, …), the pipeline splits into:
+
+- **Lead**  — top pitch of each onset cluster (skyline) → target instrument.
+- **Accompaniment** — everything else → a complementary polyphonic
+  instrument (harp / piano / guitar / organ, mixed ≈ -5 dB under the lead).
+
+Auto-pick uses a musical "color wheel": prefer **opposite attack** (percussive
+under sustained, or vice-versa) and **different family**, with wide-register
+instruments (piano, harp, organ) favored. Override with `--accompaniment`:
+
+```bash
+python render_direct.py --input song.wav --instrument violin_solo \
+    --accompaniment guitar_nylon --out out.wav        # user override
+python render_direct.py --input song.wav --instrument violin_solo \
+    --accompaniment none --out out.wav                # no accompaniment
+```
+
+If the source is already monophonic (a vocal, a solo flute) the split is
+skipped and any `--accompaniment` is silently ignored — there's no
+polyphonic content to route.
+
+## Density limiting for plucked / decaying targets
+
+Harp, guitar, harpsichord, marimba, celesta, and pizzicato patches all carry
+a `min_ioi_s` in `instruments.py`: a per-pitch minimum inter-onset gap. A
+real harpist doesn't strike the same string 15×/second; the renderer thins
+retriggered notes before FluidSynth sees them, and a 1-second sliding
+window also caps global onset rate at 14/sec (Fletcher-Rossing perceptual
+continuous-tone threshold). Values live in the catalog — no code changes to
+retune.
+
 ## Run — batch (a song through every instrument in a category)
 
 ```bash
