@@ -90,7 +90,7 @@ _ENTRIES = [
     ("bass_acoustic",           "Acoustic Bass",              "bass",   FLUIDR3, 32, "piano_sustain",  "poly", 28, 67,  0.15, None),
     ("bass_electric_fingered",  "Fingered Electric Bass",     "bass",   FLUIDR3, 33, "piano_sustain",  "poly", 28, 67,  0.15, None),
     ("bass_electric_picked",    "Picked Electric Bass",       "bass",   FLUIDR3, 34, "piano_sustain",  "poly", 28, 67,  0.15, None),
-    ("bass_fretless",           "Fretless Bass",              "bass",   FLUIDR3, 35, "piano_sustain",  "poly", 28, 67,  0.0,  None),
+    ("bass_fretless",           "Fretless Bass",              "bass",   FLUIDR3, 35, "piano_sustain",  "poly", 28, 67,  0.15, None),
 
     # ── strings (FluidR3) ───────────────────────────────────────────────
     ("violin_fluidr3",          "Violin (FluidR3 GM)",        "strings", FLUIDR3, 40, "strings",       "mono", 55, 105, 0.0,  "harp_sonatina"),

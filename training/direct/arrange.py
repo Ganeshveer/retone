@@ -156,18 +156,11 @@ def _reduce_polyphony(notes, max_voices: int, tol: float = CLUSTER_TOL):
     return sorted(out, key=lambda n: n.start)
 
 
-def split_lead_accompaniment(pm, lead_voices: int = 1):
-    """Skyline split. Returns (lead_pm, accomp_pm) — both are deep copies.
+def _skyline_split(pm, lead_voices: int = 1):
+    """Original zero-parameter skyline: top-N pitches per cluster → lead.
 
-    Per-cluster: the top `lead_voices` pitches go to the lead track; every
-    other note in the cluster goes to accompaniment. Notes that are alone in
-    their onset cluster still go to the lead — a single-voice line stays
-    unchanged.
-
-    Rationale: the skyline (top pitch) is the melody almost by convention in
-    Western tonal music (Uitdenbogerd & Zobel 1998). A monophonic target
-    (violin_solo, trumpet_solo, flute_solo) should play that line; a
-    polyphonic accompaniment carries the harmony underneath.
+    Kept as a fallback / A-B baseline. In practice `split_lead_accompaniment`
+    (weighted-skyline with hysteresis) is the shipping algorithm.
     """
     lead_pm  = copy.deepcopy(pm)
     accomp_pm = copy.deepcopy(pm)
@@ -179,12 +172,214 @@ def split_lead_accompaniment(pm, lead_voices: int = 1):
                 lead_kept.extend(g)
                 continue
             g_sorted = sorted(g, key=lambda n: n.pitch)
-            lead_kept.extend(g_sorted[-lead_voices:])   # top-N pitches
-            accomp_kept.extend(g_sorted[:-lead_voices]) # everything below
-        lead_inst.notes  = sorted(lead_kept,  key=lambda n: n.start)
+            lead_kept.extend(g_sorted[-lead_voices:])
+            accomp_kept.extend(g_sorted[:-lead_voices])
+        lead_inst.notes   = sorted(lead_kept,   key=lambda n: n.start)
         accomp_inst.notes = sorted(accomp_kept, key=lambda n: n.start)
 
     return lead_pm, accomp_pm
+
+
+# ────────────────── weighted-skyline melody extraction ─────────────────────
+#
+# Pure skyline (Uitdenbogerd & Zobel 1998) picks the top pitch of every onset
+# cluster. Famously brittle: a grace note above the melody hijacks the line
+# for one beat; every note of an arpeggio becomes "lead" because clusters
+# are single-note; a mid-voice melody under piano chord tones gets lost.
+#
+# The revised algorithm (post-Chai 2000, Rizo 2006, Jiang SMC 2019, jSymbolic
+# feature research) scores every candidate note against the last-picked lead
+# note using several complementary signals, then applies register hysteresis
+# so a plausible melodic voice is preserved across brief absences.
+#
+# Weights below are hand-tuned starting points; they are exposed as arguments
+# so they can be sweep-tuned on real content if a subjective A/B pushes them.
+
+def _note_scores(cluster, prev_lead_pitch,
+                 pitch_mean, pitch_std,
+                 w_pitch=1.5, w_dur=0.8, w_vel=0.6, w_lock=2.0,
+                 register_lock_semitones=7):
+    """Return the score of every note in `cluster` against the running lead.
+
+    Higher = more melody-like. Components:
+      + `w_pitch * pitch_z`         — piece-wide register normalization
+      + `w_dur   * log(duration+ε)` — sustained notes are more melodic
+      + `w_vel   * velocity / 127`  — louder notes carry the tune
+      + `w_lock  * register_lock`   — reward staying near prev_lead within
+                                      ±register_lock_semitones, penalize
+                                      octave jumps
+    """
+    import math
+    out = []
+    for n in cluster:
+        pitch_z = (n.pitch - pitch_mean) / pitch_std if pitch_std > 0 else 0.0
+        dur     = math.log(1e-3 + (n.end - n.start))
+        vel     = n.velocity / 127.0
+        if prev_lead_pitch is None:
+            lock = 0.0
+        else:
+            d = abs(n.pitch - prev_lead_pitch)
+            if d <= register_lock_semitones:
+                lock = 1.0 - (d / register_lock_semitones) * 0.3    # ∈ [0.7, 1.0]
+            else:
+                # Penalize octave-plus jumps hard
+                lock = -min(1.0, (d - register_lock_semitones) / 12.0)
+        out.append(w_pitch * pitch_z + w_dur * dur + w_vel * vel + w_lock * lock)
+    return out
+
+
+def split_lead_accompaniment(pm,
+                             tol: float = CLUSTER_TOL,
+                             register_lock_semitones: int = 7,
+                             hysteresis_s: float = 0.5,
+                             lead_overlap_s: float = 0.03,
+                             score_threshold: float = -0.5,
+                             bootstrap_top_pitch: bool = True):
+    """Weighted-skyline melody extraction with register hysteresis.
+
+    Returns (lead_pm, accomp_pm) — both are deep copies.
+
+    Improvements over pure skyline (see `_skyline_split` for the baseline):
+
+    1. **Weighted scoring** — for each onset cluster, every candidate note is
+       scored on pitch_z, log(duration), velocity, and register continuity
+       with the previously chosen lead. Argmax → lead; the rest go to accomp.
+       Fixes: grace-note hijacks (short high notes don't score), mid-voice
+       melodies (a G4 sustained under a C5 chord tone can still win because
+       duration + register-lock outweigh pitch_z).
+
+    2. **Register lock (±`register_lock_semitones`)** — once a lead is
+       established, notes within that window get a strong bonus, notes
+       further away get penalized. This keeps a coherent melodic line
+       through arpeggios: only the arpeggio note nearest the melody register
+       stays on lead; the rest fall to accompaniment.
+
+    3. **Hysteresis (`hysteresis_s`)** — after that many seconds with no
+       candidate scoring above `score_threshold`, unlock the register so a
+       genuine new melodic line can be bootstrapped. Prevents the algorithm
+       from locking onto a wandering register.
+
+    4. **Lead overlap (`lead_overlap_s`)** — each lead note is stretched
+       slightly so it overlaps its successor. FluidSynth (and any GM/legato
+       renderer) sees this as legato instead of hard note-off; when combined
+       with `apply_mono_legato`, it produces smooth transitions.
+
+    5. **Guaranteed monophonic output** — after selection, any overlapping
+       lead notes are truncated so the lead line is strictly mono at MIDI
+       level, regardless of downstream mono-mode support.
+
+    Fails on: fugues / contrapuntal music (multiple equally-important
+    voices), piano concertos with mid-voice countermelodies, jazz solos in
+    the same register as loud comping. These will always be judgment calls;
+    document at the pipeline level.
+    """
+    import math
+
+    lead_pm   = copy.deepcopy(pm)
+    accomp_pm = copy.deepcopy(pm)
+
+    for lead_inst, accomp_inst in zip(lead_pm.instruments, accomp_pm.instruments):
+        all_notes = lead_inst.notes
+        if not all_notes:
+            lead_inst.notes   = []
+            accomp_inst.notes = []
+            continue
+
+        # Piece-wide pitch stats for z-scoring
+        pitches = [n.pitch for n in all_notes]
+        pitch_mean = float(sum(pitches)) / len(pitches)
+        pitch_std  = (
+            math.sqrt(sum((p - pitch_mean) ** 2 for p in pitches) / len(pitches))
+            if len(pitches) > 1 else 1.0
+        )
+
+        clusters = _cluster_onsets(all_notes, tol=tol)
+        lead_kept, accomp_kept = [], []
+        prev_lead_pitch = None
+        prev_lead_time  = None
+
+        for g in clusters:
+            # Bootstrap the first cluster: if there is no prev_lead OR
+            # hysteresis expired, fall back to the highest note in the
+            # cluster to seed the melodic line.
+            hysteresis_expired = (
+                prev_lead_time is not None
+                and (g[0].start - prev_lead_time) > hysteresis_s
+            )
+            if prev_lead_pitch is None or hysteresis_expired:
+                if bootstrap_top_pitch:
+                    lead_note = max(g, key=lambda n: n.pitch)
+                else:
+                    scores = _note_scores(g, None, pitch_mean, pitch_std,
+                                          register_lock_semitones=register_lock_semitones)
+                    lead_note = g[scores.index(max(scores))]
+                lead_kept.append(lead_note)
+                for n in g:
+                    if n is not lead_note:
+                        accomp_kept.append(n)
+                prev_lead_pitch = lead_note.pitch
+                prev_lead_time  = lead_note.start
+                continue
+
+            # Regular cluster: score, pick argmax if above threshold
+            scores = _note_scores(g, prev_lead_pitch, pitch_mean, pitch_std,
+                                  register_lock_semitones=register_lock_semitones)
+            best_i    = scores.index(max(scores))
+            best_note = g[best_i]
+            best_score = scores[best_i]
+
+            if best_score >= score_threshold:
+                lead_kept.append(best_note)
+                for n in g:
+                    if n is not best_note:
+                        accomp_kept.append(n)
+                prev_lead_pitch = best_note.pitch
+                prev_lead_time  = best_note.start
+            else:
+                # Nothing plausibly melodic in this cluster — route all to
+                # accompaniment and let the hysteresis clock keep ticking.
+                accomp_kept.extend(g)
+
+        # Enforce monophonic + light legato overlap on the lead line
+        lead_sorted = sorted(lead_kept, key=lambda n: n.start)
+        for i in range(len(lead_sorted) - 1):
+            nxt = lead_sorted[i + 1]
+            target_end = nxt.start + lead_overlap_s
+            if lead_sorted[i].end > target_end:
+                lead_sorted[i].end = target_end   # truncate overlap → mono
+            elif lead_sorted[i].end < nxt.start:
+                lead_sorted[i].end = min(nxt.start + lead_overlap_s,
+                                         lead_sorted[i].end + lead_overlap_s)
+
+        lead_inst.notes   = lead_sorted
+        accomp_inst.notes = sorted(accomp_kept, key=lambda n: n.start)
+
+    return lead_pm, accomp_pm
+
+
+def apply_mono_legato(pm, mono=True, legato=True):
+    """Insert MIDI CC 126 (Mono On, value=0) and CC 68 (Legato On, value=127)
+    at t=0 for every instrument in `pm`.
+
+    FluidSynth honors both — see the FluidSynth channel-setup docs. When the
+    lead instrument is monophonic (violin_solo, trumpet_solo, ...), this
+    turns hard note-off / re-attack transitions into smooth glides. The
+    lead-overlap enforced by `split_lead_accompaniment` (~30 ms) is what
+    actually triggers legato mode on each successive note.
+
+    Safe to call unconditionally: applying to a poly instrument that ignores
+    these CCs is a no-op.
+    """
+    for inst in pm.instruments:
+        if mono:
+            inst.control_changes.append(
+                pretty_midi.ControlChange(number=126, value=0, time=0.0)
+            )
+        if legato:
+            inst.control_changes.append(
+                pretty_midi.ControlChange(number=68, value=127, time=0.0)
+            )
+    return pm
 
 
 def enforce_min_ioi(pm,

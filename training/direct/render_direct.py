@@ -58,7 +58,8 @@ def _get_dp():
 
 from instruments import INSTRUMENTS, Instrument, by_category, list_categories
 from arrange import (ARRANGERS, clamp_to_range,
-                     enforce_min_ioi, split_lead_accompaniment)
+                     enforce_min_ioi, split_lead_accompaniment,
+                     apply_mono_legato)
 
 
 # ────────────────────────── transcribers ───────────────────────────────────
@@ -449,6 +450,9 @@ def render_one(input_audio, instrument_name, out_wav, transcriber="basic_pitch",
             print(f"  density limit (lead, min_ioi={lead.min_ioi_s:.2f}s): "
                   f"{n_before} -> {n_after} notes")
     lead_pm = ARRANGERS[lead.arranger](lead_pm)
+    # Enable mono/legato at CC level for monophonic targets (safe no-op on poly)
+    if lead.polyphony == "mono":
+        lead_pm = apply_mono_legato(lead_pm)
 
     if accomp is not None:
         accomp_pm = clamp_to_range(accomp_pm, accomp.range_lo, accomp.range_hi)
