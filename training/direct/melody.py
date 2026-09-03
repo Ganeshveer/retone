@@ -39,23 +39,30 @@ from arrange import _cluster_onsets, CLUSTER_TOL
 def extract_melody_pyin(audio_path: str,
                         sr: int = 22050,
                         hop_length: int = 512,
-                        fmin_note: str = "C2",
+                        fmin_note: str = "C4",
                         fmax_note: str = "C7",
-                        hpss: bool = True):
+                        hpss: bool = True,
+                        highpass_hz: float | None = 250.0):
     """Run pYIN on the audio and return a per-frame monophonic F0 track.
 
     Parameters
     ----------
-    audio_path : path to a WAV, FLAC, or other librosa-readable file
-    sr         : resample rate. 22050 is librosa's default and enough for
-                 melody-register fundamentals up to ~2 kHz.
-    hop_length : frames advance by this many samples. 512 @ 22050 Hz ≈
-                 23 ms per frame, ~43 frames per second.
-    fmin_note  : lower bound of the pYIN search. C2 (~65 Hz) skips deep
-                 bass notes so pYIN latches onto the melody register.
-    fmax_note  : upper bound. C7 (~2093 Hz) covers piccolo & flute range.
-    hpss       : if True, run harmonic-percussive separation first so
-                 drums / attacks don't distract pYIN. Cheap and worth it.
+    audio_path   : path to a WAV, FLAC, or other librosa-readable file
+    sr           : resample rate. 22050 is librosa's default and enough for
+                   melody-register fundamentals up to ~2 kHz.
+    hop_length   : frames advance by this many samples. 512 @ 22050 Hz ≈
+                   23 ms per frame, ~43 frames per second.
+    fmin_note    : lower bound of the pYIN search. Default C4 (~262 Hz):
+                   monophonic F0 trackers otherwise lock onto the bass
+                   voice on polyphonic input. C4 forces pYIN to focus on
+                   the melody register (typical instrumental melodies sit
+                   between C4 and C6).
+    fmax_note    : upper bound. C7 (~2093 Hz) covers piccolo & flute range.
+    hpss         : if True, run harmonic-percussive separation first so
+                   drums / attacks don't distract pYIN.
+    highpass_hz  : optional high-pass cutoff (Hz) applied before pYIN. 250 Hz
+                   further suppresses bass energy that can pull pYIN below
+                   the melody register even when fmin is set.
 
     Returns
     -------
@@ -66,9 +73,14 @@ def extract_melody_pyin(audio_path: str,
                  confidence gate.
     """
     import librosa
+    from scipy.signal import butter, sosfiltfilt
     y, sr = librosa.load(audio_path, sr=sr, mono=True)
     if hpss:
         y, _ = librosa.effects.hpss(y)
+    if highpass_hz is not None and highpass_hz > 0:
+        # 4th-order high-pass to suppress bass content that steers pYIN low.
+        sos = butter(4, highpass_hz / (sr / 2), btype="highpass", output="sos")
+        y = sosfiltfilt(sos, y).astype("float32")
     fmin = librosa.note_to_hz(fmin_note)
     fmax = librosa.note_to_hz(fmax_note)
     # librosa.pyin returns (f0, voiced_flag, voiced_probs); f0 is NaN when
