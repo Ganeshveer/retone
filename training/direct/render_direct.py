@@ -60,6 +60,11 @@ from instruments import INSTRUMENTS, Instrument, by_category, list_categories
 from arrange import (ARRANGERS, clamp_to_range,
                      enforce_min_ioi, split_lead_accompaniment,
                      apply_mono_legato)
+try:
+    from melody import split_by_melody as _split_by_melody
+    _HAVE_PYIN_SPLIT = True
+except Exception:
+    _HAVE_PYIN_SPLIT = False
 
 
 # ────────────────────────── transcribers ───────────────────────────────────
@@ -468,12 +473,40 @@ def render_one(input_audio, instrument_name, out_wav, transcriber="basic_pitch",
         else:
             accomp = INSTRUMENTS[pick_accompaniment(lead)]
 
-        lead_pm, accomp_pm = split_lead_accompaniment(pm)
+        # Prefer audio-guided melody extraction (pYIN) when we have the
+        # source audio and the librosa/melody module is available. Fall
+        # back to weighted-skyline if pYIN raises or gives no coverage.
+        used_pyin = False
+        if _HAVE_PYIN_SPLIT and os.path.exists(input_audio):
+            try:
+                lead_pm, accomp_pm, stats = _split_by_melody(
+                    pm, input_audio, verbose=verbose,
+                )
+                # If pYIN was voiced on almost none of the audio, its
+                # per-cluster picks are basically random — use skyline
+                # instead. 10 % voiced coverage is the guard.
+                voiced_frac = (stats["frames_voiced"]
+                               / max(stats["total_frames"], 1))
+                if voiced_frac >= 0.10:
+                    used_pyin = True
+                else:
+                    if verbose:
+                        print(f"  pYIN voiced coverage {voiced_frac:.0%} — "
+                              f"falling back to weighted-skyline")
+            except Exception as e:
+                if verbose:
+                    print(f"  pYIN split failed ({e.__class__.__name__}: {e}) "
+                          f"— falling back to weighted-skyline")
+
+        if not used_pyin:
+            lead_pm, accomp_pm = split_lead_accompaniment(pm)
+
         if verbose:
             n_lead   = sum(len(i.notes) for i in lead_pm.instruments)
             n_accomp = sum(len(i.notes) for i in accomp_pm.instruments)
-            print(f"  split lead / accomp: {n_lead} / {n_accomp} notes"
-                  f" — accomp = {accomp.name}")
+            algo     = "pYIN" if used_pyin else "weighted-skyline"
+            print(f"  split ({algo}) lead / accomp: {n_lead} / {n_accomp} "
+                  f"notes — accomp = {accomp.name}")
     else:
         lead_pm, accomp_pm = pm, None
         if lead.polyphony == "mono" and not src_is_poly and verbose:
