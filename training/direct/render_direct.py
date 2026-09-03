@@ -129,6 +129,34 @@ TRANSCRIBERS = {
 }
 
 
+def choose_transcriber(input_audio: str, source_kind: str | None = None) -> str:
+    """Pick the best transcriber for the source. Piano sources get ByteDance
+    (F1 96.72 vs Basic Pitch ~85, with real velocity + pedal); anything else
+    gets Basic Pitch.
+
+    `source_kind` (optional) short-circuits the heuristic:
+        "piano"   -> bytedance_piano (or transkun if you know it's clean)
+        "poly"    -> basic_pitch (any polyphonic non-piano)
+        "mono"    -> basic_pitch (works fine for solo instruments too)
+
+    When `source_kind` is None, we fall back to a filename hint: names
+    containing 'piano', 'pianoman', 'elise', 'canon' bias to the piano
+    branch. This is intentionally cheap — the audio-classifier idea would
+    add a big dependency to save one call.
+    """
+    if source_kind == "piano":
+        return "bytedance_piano"
+    if source_kind in ("poly", "mono"):
+        return "basic_pitch"
+    name = os.path.basename(input_audio).lower()
+    piano_hints = ("piano", "pianoman", "elise", "canon", "chopin",
+                   "beethoven", "mozart_piano", "rachmaninoff")
+    for h in piano_hints:
+        if h in name:
+            return "bytedance_piano"
+    return "basic_pitch"
+
+
 # ────────────────────────── render + polish ────────────────────────────────
 
 def render_sf2(pm, sf2_path, program, seconds, out_wav):
@@ -147,10 +175,17 @@ def render_sf2(pm, sf2_path, program, seconds, out_wav):
         dp.SF2, dp.PROGRAMS["piano"] = orig_sf, orig_prog
 
 
-def synth_hall_ir(sr=44100, seconds=1.0, decay=3.0):
-    """Cheap exp-decaying dense-noise IR — small hall / plate approximation."""
+def synth_hall_ir(sr=44100, seconds=1.0, decay=3.0, seed=42):
+    """Cheap exp-decaying dense-noise IR — small hall / plate approximation.
+
+    Seeded by default (`seed=42`) so every render of the same source produces
+    an identical reverb tail. Two runs of the same source now byte-diff only
+    if the render pipeline itself changed. Pass `seed=None` for the old
+    behavior (random every call).
+    """
     n = int(sr * seconds)
-    ir = np.random.randn(n).astype(np.float32) * np.exp(-decay * np.arange(n) / n)
+    rng = np.random.default_rng(seed) if seed is not None else np.random
+    ir = rng.standard_normal(n).astype(np.float32) * np.exp(-decay * np.arange(n) / n)
     return ir / (np.abs(ir).max() or 1)
 
 
@@ -168,11 +203,13 @@ def apply_light_reverb(wav_path, wet=0.15, ir=None):
     sf.write(wav_path, (mixed / peak * 0.9).astype(np.float32), sr)
 
 
-def _mix_and_write(a_wav, b_wav, out_wav, a_gain=1.0, b_gain=0.55):
+def _mix_and_write(a_wav, b_wav, out_wav, a_gain=1.0, b_gain=0.35):
     """Weighted sum of two mono renders → normalized WAV.
 
-    Default `b_gain=0.55` is roughly -5 dB — enough to keep the accompaniment
-    audible under the lead without fighting it.
+    Default `b_gain=0.35` (~-9 dB below the lead) matches standard
+    orchestration practice — soloist over ensemble sits ~8-12 dB above
+    the accompaniment bed. The previous default (-5 dB) put the accomp
+    close enough to the lead that harp/rhodes/guitar muddied every mix.
     """
     ya, sr_a = sf.read(a_wav)
     yb, sr_b = sf.read(b_wav)
@@ -395,6 +432,11 @@ def render_one(input_audio, instrument_name, out_wav, transcriber="basic_pitch",
     t0 = time.time()
     pm = tr(input_audio)
     _get_dp().apply_sustain(pm)
+    # Strip CC 64 (sustain pedal) events: apply_sustain has already extended
+    # note ends to pedal-release. Leaving the CCs makes FluidSynth honor the
+    # pedal a second time, giving ~2x too long ringing tails.
+    for inst in pm.instruments:
+        inst.control_changes = [c for c in inst.control_changes if c.number != 64]
     n_notes = sum(len(i.notes) for i in pm.instruments)
     prof = polyphony_profile(pm)
     if verbose:
@@ -441,17 +483,30 @@ def render_one(input_audio, instrument_name, out_wav, transcriber="basic_pitch",
             print(f"  accompaniment disabled by --accompaniment none")
 
     # ── per-track passes ────────────────────────────────────────────────
-    lead_pm = clamp_to_range(lead_pm, lead.range_lo, lead.range_hi)
+    # For narrow-range MONO targets on a poly source we prefer to drop
+    # out-of-range notes rather than fold them by octaves — the
+    # accompaniment carries the bass; folding creates audible octave
+    # jumps in the melody. For a wide-range poly target playing solo the
+    # octave fold is preferable (no accomp to catch the note).
+    lead_clamp_mode = "drop" if accomp is not None else "octave"
+    lead_pm = clamp_to_range(lead_pm, lead.range_lo, lead.range_hi,
+                             mode=lead_clamp_mode)
     if lead.min_ioi_s > 0:
         n_before = sum(len(i.notes) for i in lead_pm.instruments)
-        lead_pm = enforce_min_ioi(lead_pm, lead.min_ioi_s)
+        # Lead: only per-pitch thinning (drop same-pitch re-strikes). Skip
+        # the global 14-onsets/s cap so a soft skyline melody note is
+        # never dropped in favor of louder inner voices of the accomp.
+        lead_pm = enforce_min_ioi(lead_pm, lead.min_ioi_s,
+                                  global_max_onsets=None)
         n_after  = sum(len(i.notes) for i in lead_pm.instruments)
         if verbose and n_after < n_before:
             print(f"  density limit (lead, min_ioi={lead.min_ioi_s:.2f}s): "
                   f"{n_before} -> {n_after} notes")
     lead_pm = ARRANGERS[lead.arranger](lead_pm)
-    # Enable mono/legato at CC level for monophonic targets (safe no-op on poly)
-    if lead.polyphony == "mono":
+    # Mono-mode CC only fires when we actually split — a bare mono target on
+    # a mono source is played by the SF2 as-is; asserting mono CC on raw
+    # Basic Pitch output causes transcription overlaps to silence real notes.
+    if lead.polyphony == "mono" and accomp is not None:
         lead_pm = apply_mono_legato(lead_pm)
 
     if accomp is not None:
@@ -482,7 +537,7 @@ def render_one(input_audio, instrument_name, out_wav, transcriber="basic_pitch",
                 print(f"  render {accomp.display} via {os.path.basename(accomp.sf2)} …")
             render_sf2(accomp_pm, accomp.sf2, accomp.program, seconds or 300, tmp_accomp)
             _mix_and_write(tmp_lead, tmp_accomp, out_wav,
-                           a_gain=1.0, b_gain=0.55)
+                           a_gain=1.0, b_gain=0.35)
         finally:
             for f in (tmp_lead, tmp_accomp):
                 if os.path.exists(f):

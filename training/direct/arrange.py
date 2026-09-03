@@ -91,13 +91,18 @@ def arrange_for_strings(pm,
 CLUSTER_TOL = 0.035
 
 
-def clamp_to_range(pm, lo: int, hi: int, mode: str = "octave"):
+def clamp_to_range(pm, lo: int, hi: int, mode: str = "drop"):
     """Bring every note into [lo, hi].
 
+    mode="drop"    — silently drop out-of-range notes. Default. Safe choice
+                     when the accompaniment already carries the harmony —
+                     out-of-range notes just disappear from the lead.
     mode="octave"  — fold by whole octaves (preserves pitch class). Musically
-                     far better than clamping, which collapses distinct notes
-                     onto one pitch. Default.
-    mode="drop"    — silently drop out-of-range notes.
+                     preserves pitch class but on a narrow-range target
+                     (viola 48-88) an A0 folds to A#3, materially changing
+                     the harmony. Only use when the target owns the full
+                     playable range and there is no accompaniment to catch
+                     the dropped notes.
     """
     for inst in pm.instruments:
         kept = []
@@ -232,9 +237,10 @@ def split_lead_accompaniment(pm,
                              tol: float = CLUSTER_TOL,
                              register_lock_semitones: int = 7,
                              hysteresis_s: float = 0.5,
-                             lead_overlap_s: float = 0.03,
-                             score_threshold: float = -0.5,
-                             bootstrap_top_pitch: bool = True):
+                             lead_overlap_s: float = 0.0,
+                             score_threshold: float | None = None,
+                             bootstrap_top_pitch: bool = True,
+                             min_lead_hold_s: float = 0.08):
     """Weighted-skyline melody extraction with register hysteresis.
 
     Returns (lead_pm, accomp_pm) — both are deep copies.
@@ -321,14 +327,17 @@ def split_lead_accompaniment(pm,
                 prev_lead_time  = lead_note.start
                 continue
 
-            # Regular cluster: score, pick argmax if above threshold
+            # Regular cluster: score, pick argmax. If score_threshold is set
+            # and the winner is still below it, route the whole cluster to
+            # accompaniment (creates a gap on lead) — off by default so
+            # every cluster contributes something to the lead line.
             scores = _note_scores(g, prev_lead_pitch, pitch_mean, pitch_std,
                                   register_lock_semitones=register_lock_semitones)
             best_i    = scores.index(max(scores))
             best_note = g[best_i]
             best_score = scores[best_i]
 
-            if best_score >= score_threshold:
+            if score_threshold is None or best_score >= score_threshold:
                 lead_kept.append(best_note)
                 for n in g:
                     if n is not best_note:
@@ -336,20 +345,19 @@ def split_lead_accompaniment(pm,
                 prev_lead_pitch = best_note.pitch
                 prev_lead_time  = best_note.start
             else:
-                # Nothing plausibly melodic in this cluster — route all to
-                # accompaniment and let the hysteresis clock keep ticking.
                 accomp_kept.extend(g)
 
-        # Enforce monophonic + light legato overlap on the lead line
+        # Enforce monophonic on the lead line without over-truncating: never
+        # cut a note below `min_lead_hold_s`, and never chop more than half
+        # of its original duration for an ornament-sized successor.
         lead_sorted = sorted(lead_kept, key=lambda n: n.start)
         for i in range(len(lead_sorted) - 1):
-            nxt = lead_sorted[i + 1]
+            cur, nxt = lead_sorted[i], lead_sorted[i + 1]
+            orig_dur = cur.end - cur.start
             target_end = nxt.start + lead_overlap_s
-            if lead_sorted[i].end > target_end:
-                lead_sorted[i].end = target_end   # truncate overlap → mono
-            elif lead_sorted[i].end < nxt.start:
-                lead_sorted[i].end = min(nxt.start + lead_overlap_s,
-                                         lead_sorted[i].end + lead_overlap_s)
+            floor = cur.start + max(min_lead_hold_s, 0.5 * orig_dur)
+            if cur.end > target_end:
+                cur.end = max(target_end, floor)
 
         lead_inst.notes   = lead_sorted
         accomp_inst.notes = sorted(accomp_kept, key=lambda n: n.start)
@@ -357,23 +365,24 @@ def split_lead_accompaniment(pm,
     return lead_pm, accomp_pm
 
 
-def apply_mono_legato(pm, mono=True, legato=True):
-    """Insert MIDI CC 126 (Mono On, value=0) and CC 68 (Legato On, value=127)
-    at t=0 for every instrument in `pm`.
+def apply_mono_legato(pm, mono=True, legato=False):
+    """Insert MIDI CC 126 (Mono Mode On, value=1) at t=0 for every instrument.
 
-    FluidSynth honors both — see the FluidSynth channel-setup docs. When the
-    lead instrument is monophonic (violin_solo, trumpet_solo, ...), this
-    turns hard note-off / re-attack transitions into smooth glides. The
-    lead-overlap enforced by `split_lead_accompaniment` (~30 ms) is what
-    actually triggers legato mode on each successive note.
+    CC 126 value=1 is the unambiguous "one-voice mono" — the value=0 special
+    case has implementation-defined behavior across MIDI hosts. FluidSynth
+    understands the value=1 form.
+
+    CC 68 (Legato Footswitch) is OFF by default because most SoundFont-based
+    synths — FluidSynth's default engine included — ignore it, and asserting
+    it can produce inconsistent results across builds.
 
     Safe to call unconditionally: applying to a poly instrument that ignores
-    these CCs is a no-op.
+    the CC is a no-op.
     """
     for inst in pm.instruments:
         if mono:
             inst.control_changes.append(
-                pretty_midi.ControlChange(number=126, value=0, time=0.0)
+                pretty_midi.ControlChange(number=126, value=1, time=0.0)
             )
         if legato:
             inst.control_changes.append(
@@ -386,7 +395,7 @@ def enforce_min_ioi(pm,
                     min_ioi_s: float,
                     per_pitch: bool = True,
                     global_window_s: float = 1.0,
-                    global_max_onsets: int = 14):
+                    global_max_onsets: int | None = 14):
     """Density limiter for plucked / short-decay targets.
 
     Two passes:
